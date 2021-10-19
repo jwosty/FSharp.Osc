@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Osc.fs\Osc.fs.fsproj" />
+    <ProjectReference Include="..\src\Osc.fs.fsproj" />
   </ItemGroup>
 
 </Project>
