@@ -1,8 +1,10 @@
 ﻿module Osc.fs
 open System
+open System.Collections.Concurrent
 open System.IO
 open System.Runtime.CompilerServices
 open System.Text
+open System.Text.RegularExpressions
 open System.Runtime.InteropServices
 open FSharp.NativeInterop
 
@@ -167,5 +169,36 @@ let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
     for writeFunc in writeFuncs do
         do! writeFunc ()
     ()
+}
+
+type DispatchTable =
+    | Path of name:string * children: DispatchTable list
+    | Method of name:string * (OscMessage -> Async<unit>)
+
+let internal pathPartRegexes = ConcurrentDictionary<string, Regex>()
+
+let internal getPathPartRegex (pattern: string) =
+    match pathPartRegexes.TryGetValue pattern with
+    | true, r -> r
+    | false, _ ->
+        let inner = pattern.Replace("*", ".*").Replace("?", ".?")
+        let r = Regex($"^{inner}$")
+        pathPartRegexes.[pattern] <- r
+        r
+
+let dispatchMessage table (msg: OscMessage) = async {
+    let rec dispatchMessageInner table msg path = async {
+        match path, table with
+        | part::rest, Path (name, children) when (getPathPartRegex part).IsMatch name ->
+            for child in children do
+                do! dispatchMessageInner child msg rest
+        | part::_, Method (name, methodFunc) when (getPathPartRegex part).IsMatch name ->
+            do! methodFunc msg
+        | _ ->
+            ()
+    }
+    let parts = msg.addressPattern.TrimStart('/').Split('/') |> Array.toList
+    for node in table do
+        return! dispatchMessageInner node msg parts
 }
 

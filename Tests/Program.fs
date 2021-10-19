@@ -214,6 +214,71 @@ let tests =
                 testList testName [makeParseTest Expect.equal parseOscMessageAsync value bytes]
             ))
         )
+        testList (nameof(dispatchMessage)) [
+            let NoCallMethod name = Method (name, (fun _ -> async { failwith $"{name} should not be called!" }))
+            testCaseAsync "/foo" (async {
+                let mutable fooCalled = false
+                let msg = { addressPattern = "/foo"; arguments = [OscInt32 10] }
+                let table = [Method ("foo", (fun m -> async { Expect.equal "/foo msg" msg m; fooCalled <- true } ))]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo method called" fooCalled
+            })
+            testCaseAsync "/foo/bar" (async {
+                let mutable fooBarCalled = false
+                let msg = { addressPattern = "/foo/bar"; arguments = [OscInt32 42] }
+                let table = [
+                    Path ("foo", [
+                        NoCallMethod "baz"
+                        Method ("bar", (fun m -> async { Expect.equal "/foo/bar msg" msg m; fooBarCalled <- true } ))
+                        NoCallMethod "qux"
+                    ])
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo/bar method called" fooBarCalled
+            })
+            testCaseAsync "/foo/*" (async {
+                let mutable fooBarCalled = false
+                let mutable fooBazCalled = false
+                let mutable fooQuxCalled = false
+                let msg = { addressPattern = "/foo/*"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Path ("foo", [
+                        Method ("baz", (fun m -> async { Expect.equal "/foo/baz msg" msg m; fooBazCalled <- true } ))
+                        Method ("bar", (fun m -> async { Expect.equal "/foo/bar msg" msg m; fooBarCalled <- true } ))
+                        Method ("qux", (fun m -> async { Expect.equal "/foo/qux msg" msg m; fooQuxCalled <- true } ))
+                    ])
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo/baz method called" fooBazCalled
+                Expect.isTrue "/foo/bar method called" fooBarCalled
+                Expect.isTrue "/foo/qux method called" fooQuxCalled
+            })
+            testCaseAsync "/foo/ba?/1" (async {
+                let mutable fooBaz1Called = false
+                let mutable fooBar1Called = false
+                let msg = { addressPattern = "/foo/ba?/1"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Path ("foo", [
+                        Path ("bar", [
+                            Method ("1", (fun m -> async { Expect.equal "/foo/bar msg" msg m; fooBar1Called <- true } ))
+                            NoCallMethod "2"
+                        ])
+                        Path ("baz", [
+                            Method ("1", (fun m -> async { Expect.equal "/foo/baz msg" msg m; fooBaz1Called <- true } ))
+                            NoCallMethod "11"
+                            NoCallMethod "2"
+                        ])
+                        Path ("qux", [
+                            NoCallMethod "1"
+                            NoCallMethod "2"
+                        ])
+                    ])
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo/bar method called" fooBar1Called
+                Expect.isTrue "/foo/baz method called" fooBaz1Called
+            })
+        ]
     ]
 
 //"/oscillator/4/frequency" |> Seq.chunkBySize 4 |> Seq.map (fun cs -> cs |> Array.map (fun c -> $"byte '{c}'") |> String.concat "; ") |> String.concat ";\n" |> printfn "%s"
