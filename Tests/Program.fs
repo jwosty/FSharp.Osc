@@ -203,6 +203,42 @@ let tests =
                 result |> Expect.equal (nameof(result)) "The quick brown fox jumped over the lazy dog."
             })
         ]
+        testList (nameof(parseOscTypeTagAsync)) [
+            testCaseAsync "i" (async {
+                use stream = new MemoryStream([|
+                    byte ','; byte 'i'; 0uy;      0uy
+                |])
+
+                let! result = parseOscTypeTagAsync stream
+                result |> Expect.equal (nameof(result)) "i"
+            })
+            testCaseAsync "if" (async {
+                use stream = new MemoryStream([|
+                    byte ','; byte 'i'; byte 'f';      0uy
+                |])
+
+                let! result = parseOscTypeTagAsync stream
+                result |> Expect.equal (nameof(result)) "if"
+            })
+            testCaseAsync "fss" (async {
+                use stream = new MemoryStream([|
+                    byte ','; byte 'f'; byte 's'; byte 's'
+                    0uy;      0uy;      0uy;      0uy
+                |])
+
+                let! result = parseOscTypeTagAsync stream
+                result |> Expect.equal (nameof(result)) "fss"
+            })
+            testCaseAsync "fsis" (async {
+                use stream = new MemoryStream([|
+                    byte ','; byte 'f'; byte 's'; byte 'i'
+                    byte 's'; 0uy;      0uy;      0uy
+                |])
+
+                let! result = parseOscTypeTagAsync stream
+                result |> Expect.equal (nameof(result)) "fsis"
+            })
+        ]
     ]
 
 [<EntryPoint>]
