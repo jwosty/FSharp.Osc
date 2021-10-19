@@ -164,10 +164,35 @@ let tests =
                     [| byte '/'; byte 'f'; byte 'o'; byte 'o'  
                        byte '/'; byte 'b'; byte 'a'; byte 'r'  // /foo/bar
                        0x00uy;   0x00uy;   0x00uy;   0x00uy
-                       byte ','; byte 's'; byte 'f'; 0uy       // ,sf
+                       byte ','; byte 's'; byte 'f'; 0x00uy    // ,sf
                        byte 'h'; byte 'e'; byte 'l'; byte 'l'  // hello!
                        byte 'o'; byte '!'; 0uy;      0uy
                        0x42uy;   0x28uy;   0x00uy;   0x00uy |] // 42.0
+                // examples straight from http://opensoundcontrol.org/spec-1_0-examples.html#osc-message-examples
+                "OSC spec example 1",
+                    { addressPattern = "/oscillator/4/frequency"; arguments = [OscFloat32 440.f] },
+                    [| byte '/'; byte 'o'; byte 's'; byte 'c'
+                       byte 'i'; byte 'l'; byte 'l'; byte 'a'
+                       byte 't'; byte 'o'; byte 'r'; byte '/'
+                       byte '4'; byte '/'; byte 'f'; byte 'r'
+                       byte 'e'; byte 'q'; byte 'u'; byte 'e'
+                       byte 'n'; byte 'c'; byte 'y'; 0x00uy
+                       byte ','; byte 'f'; 0x00uy;   0x00uy
+                       0x43uy;   0xDCuy;   0x00uy;   0x00uy
+                    |]
+                "OSC spec example 2",
+                    { addressPattern = "/foo"; arguments = [OscInt32 1_000; OscInt32 -1; OscString "hello"; OscFloat32 1.234f; OscFloat32 5.678f] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; byte 'i'; byte 'i'; byte 's'
+                       byte 'f'; byte 'f'; 0x00uy;   0x00uy
+                       0x00uy;   0x00uy;   0x03uy;   0xE8uy    // 1_000
+                       0xFFuy;   0xFFuy;   0xFFuy;   0xFFuy    // -1
+                       byte 'h'; byte 'e'; byte 'l'; byte 'l'  // hello
+                       byte 'o'; 0x00uy;   0x00uy;   0x00uy
+                       0x3Fuy;   0x9Duy;   0xF3uy;   0xB6uy    // 1.234
+                       0x40uy;   0xB5uy;   0xB2uy;   0x2Duy |] // 5.678
+
             ] |> List.map (fun (testName, value, bytes) ->
                 makeParseAndWriteTests Expect.equal parseOscMessageAsync writeOscMessageAsync testName value bytes
             )) @ ([
@@ -190,6 +215,8 @@ let tests =
             ))
         )
     ]
+
+//"/oscillator/4/frequency" |> Seq.chunkBySize 4 |> Seq.map (fun cs -> cs |> Array.map (fun c -> $"byte '{c}'") |> String.concat "; ") |> String.concat ";\n" |> printfn "%s"
 
 [<EntryPoint>]
 let main args =
