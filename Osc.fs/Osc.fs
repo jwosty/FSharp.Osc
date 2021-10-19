@@ -44,6 +44,12 @@ let parseOscInt32Async (input: Stream) = async {
     return BitConverter.ToInt32 (bytes', 0)
 }
 
+let writeOscInt32Async (output: Stream) (value: int) = async {
+    let bytes = BitConverter.GetBytes value
+    let bytes' = if BitConverter.IsLittleEndian then Array.rev bytes else bytes
+    do! output.AsyncWrite bytes'
+}
+
 // TODO: see above
 let parseOscFloat32Async (input: Stream) = async {
     let! bytes = input.AsyncRead 4
@@ -51,9 +57,7 @@ let parseOscFloat32Async (input: Stream) = async {
     return BitConverter.ToSingle (bytes', 0)
 }
 
-//let private parseOscStringAsyncStartingWith firstCharWithErr (input: Stream) = async {
-
-//}
+let writeOscFloat32Async (output: Stream) data = async { () }
 
 let parseOscStringAsync (input: Stream) = async {
     let strs = System.Collections.Generic.List<string>()
@@ -81,6 +85,8 @@ let parseOscStringAsync (input: Stream) = async {
     
     return String.Concat(strs)
 }
+
+let writeOscStringAsync (output: Stream) data = async { () }
 
 let parseOscTypeTagAsync (input: Stream) = async {
     let! str = parseOscStringAsync input

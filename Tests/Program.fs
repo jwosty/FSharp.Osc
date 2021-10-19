@@ -26,59 +26,36 @@ let (|SomeOscFloat32|) x =
     | Some (OscFloat32 x') -> SomeOscFloat32 x'
     | _ -> raise (AssertException($"Was not Ok({nameof(OscFloat32)})"))
 
+let makeParseAndWriteTests fParse fWrite name data (bytes: byte[]) =
+    testList name [
+        testCaseAsync "Parse" (async {
+            use stream = new MemoryStream(bytes)
+            let! result = fParse stream
+            result |> Expect.equal "Parsed data" data
+        })
+        testCaseAsync "Write" (async {
+            use stream = new MemoryStream()
+            do! fWrite stream data
+            do! Async.AwaitTask (stream.FlushAsync ())
+            stream.Position <- 0L
+            let buffer = Array.zeroCreate bytes.Length
+            let! _ = stream.AsyncRead (buffer, 0, buffer.Length)
+            buffer |> Expect.sequenceEqual ("Written bytes") bytes
+        })
+    ]
+
 [<Tests>]
 let tests =
     testList ("Osc.fs") [
-        testList (nameof(parseOscInt32Async)) [
-            testCaseAsync "0" (async {
-                use stream = new MemoryStream([|
-                    0uy; 0uy; 0uy; 0uy
-                |])
-                
-                let! result = parseOscInt32Async stream
-                result |> Expect.equal "result" 0
-            })
-            testCaseAsync "10" (async {
-                use stream = new MemoryStream([|
-                    0x0uy; 0x0uy; 0x0uy; 0xAuy
-                |])
-                
-                let! result = parseOscInt32Async stream
-                result |> Expect.equal "result" 10
-            })
-            testCaseAsync "1000" (async {
-                use stream = new MemoryStream([|
-                    0x00uy; 0x00uy; 0x03uy; 0xE8uy
-                |])
-                    
-                let! result = parseOscInt32Async stream
-                result |> Expect.equal "result" 1000
-            })
-            testCaseAsync "1_000_000" (async {
-                use stream = new MemoryStream([|
-                    0x00uy; 0x0Fuy; 0x42uy; 0x40uy
-                |])
-                
-                let! result = parseOscInt32Async stream
-                result |> Expect.equal "result" 1_000_000
-            })
-            testCaseAsync "1_000_000_023" (async {
-                use stream = new MemoryStream([|
-                    0x3Buy; 0x9Auy; 0xCAuy; 0x17uy 
-                |])
-                
-                let! result = parseOscInt32Async stream
-                result |> Expect.equal "result" 1_000_000_023
-            })
-            testCaseAsync "-1_000_000_023" (async {
-                use stream = new MemoryStream([|
-                    0xC4uy; 0x65uy; 0x35uy; 0xE9uy 
-                |])
-                
-                let! result = parseOscInt32Async stream
-                result |> Expect.equal "result" -1_000_000_023
-            })
-        ]
+        testList (nameof(parseOscInt32Async)) (
+            [   0,              [|0x00uy; 0x00uy; 0x00uy; 0x00uy |]
+                10,             [|0x00uy; 0x00uy; 0x00uy; 0x0Auy |]
+                1_000,          [|0x00uy; 0x00uy; 0x03uy; 0xE8uy |]
+                1_000_000,      [|0x00uy; 0x0Fuy; 0x42uy; 0x40uy |]
+                1_000_000_023,  [|0x3Buy; 0x9Auy; 0xCAuy; 0x17uy |]
+            ]
+            |> List.map (fun (value, bytes) -> makeParseAndWriteTests parseOscInt32Async writeOscInt32Async (string value) value bytes)
+        )
         testList (nameof(parseOscFloat32Async)) [
             testCaseAsync "0" (async {
                 use stream = new MemoryStream([|
