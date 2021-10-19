@@ -26,22 +26,28 @@ let (|SomeOscFloat32|) x =
     | Some (OscFloat32 x') -> SomeOscFloat32 x'
     | _ -> raise (AssertException($"Was not Ok({nameof(OscFloat32)})"))
 
-let makeParseAndWriteTests eq fParse fWrite name data (bytes: byte[]) =
+let makeParseTest eq fParse data (bytes: byte[]) =
+    testCaseAsync "Parse" (async {
+        use stream = new MemoryStream(bytes)
+        let! result = fParse stream
+        result |> eq "Parsed data" data
+    })
+
+let makeWriteTest eq fWrite data (bytes: byte[]) =
+    testCaseAsync "Write" (async {
+        use stream = new MemoryStream()
+        do! fWrite stream data
+        do! Async.AwaitTask (stream.FlushAsync ())
+        stream.Position <- 0L
+        let buffer = Array.zeroCreate bytes.Length
+        let! _ = stream.AsyncRead (buffer, 0, buffer.Length)
+        buffer |> Expect.sequenceEqual ("Written bytes") bytes
+    })
+
+let makeParseAndWriteTests eq fParse fWrite name data bytes =
     testList name [
-        testCaseAsync "Parse" (async {
-            use stream = new MemoryStream(bytes)
-            let! result = fParse stream
-            result |> eq "Parsed data" data
-        })
-        testCaseAsync "Write" (async {
-            use stream = new MemoryStream()
-            do! fWrite stream data
-            do! Async.AwaitTask (stream.FlushAsync ())
-            stream.Position <- 0L
-            let buffer = Array.zeroCreate bytes.Length
-            let! _ = stream.AsyncRead (buffer, 0, buffer.Length)
-            buffer |> Expect.sequenceEqual ("Written bytes") bytes
-        })
+        makeParseTest eq fParse data bytes
+        makeWriteTest eq fWrite data bytes
     ]
 
 [<Tests>]
@@ -126,84 +132,63 @@ let tests =
                 makeParseAndWriteTests Expect.equal parseOscAddressPatternAsync writeOscAddressPatternAsync value value bytes
             )
         )
-        testList (nameof(parseOscMessageAsync)) [
-            testCaseAsync "/foo with no args" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'f'; byte 'o'; byte 'o'
-                    0uy;      0uy;      0uy;      0uy
-                    byte ','; 0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscMessageAsync stream
-                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo"; arguments = [] })
-            })
-            testCaseAsync "/bar with no args" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'b'; byte 'a'; byte 'r'
-                    0uy;      0uy;      0uy;      0uy
-                    byte ','; 0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscMessageAsync stream
-                result |> Expect.equal (nameof(result)) ({ addressPattern = "/bar"; arguments = [] })
-            })
-            testCaseAsync "/foo/bar with an int arg" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'f'; byte 'o'; byte 'o'
-                    byte '/'; byte 'b'; byte 'a'; byte 'r'
-                    0uy;      0uy;      0uy;      0uy
-                    byte ','; byte 'i'; 0uy;      0uy
-                    0x00uy;   0x00uy;   0x03uy;   0xE8uy    // 1000
-                |])
-
-                let! result = parseOscMessageAsync stream
-                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscInt32 1000] })
-            })
-            testCaseAsync "/foo/bar with two int args" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'f'; byte 'o'; byte 'o'  
-                    byte '/'; byte 'b'; byte 'a'; byte 'r'  // /foo/bar
-                    0uy;      0uy;      0uy;      0uy
-                    byte ','; byte 'i'; byte 'i'; 0uy       // ,ii
-                    0x00uy;   0x1Euy;   0x84uy;   0x80uy    // 2_000_000
-                    0x00uy;   0x00uy;   0x03uy;   0xE8uy    // 1000
-                |])
-
-                let! result = parseOscMessageAsync stream
-                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscInt32 2_000_000; OscInt32 1000] })
-            })
-            testCaseAsync "/foo/bar with a string and float arg" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'f'; byte 'o'; byte 'o'  
-                    byte '/'; byte 'b'; byte 'a'; byte 'r'  // /foo/bar
-                    0uy;      0uy;      0uy;      0uy
-                    byte ','; byte 's'; byte 'f'; 0uy       // ,sf
-                    byte 'h'; byte 'e'; byte 'l'; byte 'l'  // hello!
-                    byte 'o'; byte '!'; 0uy;      0uy
-                    0x42uy;   0x28uy;   0x00uy;   0x00uy    // 42.0
-                |])
-
-                let! result = parseOscMessageAsync stream
-                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscString "hello!"; OscFloat32 42.f] })
-            })
-            testCaseAsync "/foo/bar with a float string and two int args" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'f'; byte 'o'; byte 'o'  // /foo/bar
-                    byte '/'; byte 'b'; byte 'a'; byte 'r'  
-                    0uy;      0uy;      0uy;      0uy
-                    byte ','; byte 'f'; byte 'S'; byte 'i'  // ,fSii
-                    byte 'i'; 0uy;      0uy;      0uy
-                    0xC1uy;   0x4Cuy;   0x00uy;   0x00uy    // -12.75
-                    byte 'D'; byte 'a'; byte 't'; byte 'a'  // Data.
-                    byte '.'; 0uy;      0uy;      0uy
-                    0xFFuy;   0xFFuy;   0xFFuy;   0x9Cuy    // -100
-                    0x00uy;   0x00uy;   0x00uy;   0x0Fuy    // 15
-                |])
-
-                let! result = parseOscMessageAsync stream
-                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscFloat32 -12.75f; OscString "Data."; OscInt32 -100; OscInt32 15] })
-            })
-        ]
+        testList (nameof(parseOscMessageAsync)) (
+            ([
+                "/foo with no args",
+                    { addressPattern = "/foo"; arguments = [] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; 0x00uy;   0x00uy;   0x00uy |]
+                "/bar with no args",
+                    { addressPattern = "/bar"; arguments = [] },
+                    [| byte '/'; byte 'b'; byte 'a'; byte 'r'
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; 0x00uy;   0x00uy;   0x00uy |]
+                "/foo/bar with an int arg",
+                    { addressPattern = "/foo/bar"; arguments = [OscInt32 1_000] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'
+                       byte '/'; byte 'b'; byte 'a'; byte 'r'
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; byte 'i'; 0x00uy;   0x00uy
+                       0x00uy;   0x00uy;   0x03uy;   0xE8uy |]  // 1000
+                "/foo/bar with two int args",
+                    { addressPattern = "/foo/bar"; arguments = [OscInt32 2_000_000; OscInt32 1_000] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'  // /foo/bar
+                       byte '/'; byte 'b'; byte 'a'; byte 'r'
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; byte 'i'; byte 'i'; 0x00uy    // ,ii
+                       0x00uy;   0x1Euy;   0x84uy;   0x80uy    // 2_000_000
+                       0x00uy;   0x00uy;   0x03uy;   0xE8uy |] // 1_000
+                "/foo/bar with a string and float arg",
+                    { addressPattern = "/foo/bar"; arguments = [OscString "hello!"; OscFloat32 42.f] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'  
+                       byte '/'; byte 'b'; byte 'a'; byte 'r'  // /foo/bar
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; byte 's'; byte 'f'; 0uy       // ,sf
+                       byte 'h'; byte 'e'; byte 'l'; byte 'l'  // hello!
+                       byte 'o'; byte '!'; 0uy;      0uy
+                       0x42uy;   0x28uy;   0x00uy;   0x00uy |] // 42.0
+            ] |> List.map (fun (testName, value, bytes) ->
+                makeParseAndWriteTests Expect.equal parseOscMessageAsync writeOscMessageAsync testName value bytes
+            )) @ ([
+            // skip the write test for this one, since it will write as a lowercase s (which we already have a test for)
+                "/foo/bar with a float string and two int args",
+                { addressPattern = "/foo/bar"; arguments = [OscFloat32 -12.75f; OscString "Data."; OscInt32 -100; OscInt32 15] },
+                [|
+                   byte '/'; byte 'f'; byte 'o'; byte 'o'  // /foo/bar
+                   byte '/'; byte 'b'; byte 'a'; byte 'r'  
+                   0x00uy;   0x00uy;   0x00uy;   0x00uy;
+                   byte ','; byte 'f'; byte 'S'; byte 'i'  // ,fSii
+                   byte 'i'; 0x00uy;   0x00uy;   0x00uy;
+                   0xC1uy;   0x4Cuy;   0x00uy;   0x00uy    // -12.75
+                   byte 'D'; byte 'a'; byte 't'; byte 'a'  // Data.
+                   byte '.'; 0x00uy;   0x00uy;   0x00uy
+                   0xFFuy;   0xFFuy;   0xFFuy;   0x9Cuy    // -100
+                   0x00uy;   0x00uy;   0x00uy;   0x0Fuy |] // 15
+            ] |> List.map (fun (testName, value, bytes) ->
+                testList testName [makeParseTest Expect.equal parseOscMessageAsync value bytes]
+            ))
+        )
     ]
 
 [<EntryPoint>]

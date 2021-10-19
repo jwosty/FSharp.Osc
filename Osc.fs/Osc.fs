@@ -90,10 +90,10 @@ let parseOscStringAsync (input: Stream) = async {
 }
 
 let internal paddingBuffers = [|
+    [|0uy;0uy;0uy;0uy|]
     [|0uy;0uy;0uy|]
     [|0uy;0uy|]
     [|0uy|]
-    [||]
 |]
 
 let writeOscStringAsync (output: Stream) (value: string) = async {
@@ -118,7 +118,7 @@ let writeOscTypeTagAsync (output: Stream) (value: string) = async {
     let bytes = Encoding.ASCII.GetBytes value
     do! output.AsyncWrite commaBuf
     do! output.AsyncWrite bytes
-    do! output.AsyncWrite (paddingBuffers.[(value.Length + 1) % 4])
+    do! output.AsyncWrite (paddingBuffers.[(bytes.Length + 1) % 4])
 }
 
 let parseOscAddressPatternAsync (input: Stream) = async {
@@ -150,7 +150,22 @@ let parseOscMessageAsync (input: Stream) = async {
     return { addressPattern = addr; arguments = Array.toList args }
 }
 
-let writeOscMessageAsync (input: Stream) (value: string) = async {
+let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
+    do! writeOscAddressPatternAsync output value.addressPattern
+    let (typesChars, writeFuncs) =
+        value.arguments
+        |> Seq.map (fun arg ->
+            match arg with
+            | OscInt32 x -> 'i', (fun () -> writeOscInt32Async output x)
+            | OscFloat32 x -> 'f', (fun () -> writeOscFloat32Async output x)
+            | OscString x -> 's', (fun () -> writeOscStringAsync output x)
+        )
+        |> Seq.toArray
+        |> Array.unzip
+    let typeTag = typesChars |> String
+    do! writeOscTypeTagAsync output typeTag
+    for writeFunc in writeFuncs do
+        do! writeFunc ()
     ()
 }
 
