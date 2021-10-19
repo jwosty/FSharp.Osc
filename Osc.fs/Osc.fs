@@ -6,6 +6,12 @@ open System.Text
 open System.Runtime.InteropServices
 open FSharp.NativeInterop
 
+module internal Async =
+    let map f x = async {
+        let! result = x
+        return f result
+    }
+
 type MalformedMessageException =
     inherit Exception
 
@@ -29,7 +35,7 @@ type OscAtom =
     | OscString of stringValue:string
     //| OscBlob of blobData:Span<byte>
 
-type OscTypeTag = string
+type OscMessage = { addressPattern: string; arguments: OscAtom list }
 
 // TODO: Check big-endian systems. This *should* work correctly, but I haven't tested it
 let parseOscInt32Async (input: Stream) = async {
@@ -79,11 +85,36 @@ let parseOscStringAsync (input: Stream) = async {
 let parseOscTypeTagAsync (input: Stream) = async {
     let! str = parseOscStringAsync input
     if str.Length = 0 then
-        return raise (MalformedMessageException($"Failed to parse type tag. Expected ',' but got null."))
+        return raise (MalformedMessageException($"Invalid type tag. Expected ',' but got null"))
     elif str.[0] <> ',' then
-        return raise (MalformedMessageException($"Failed to parse type tag. Expected ',' but got '{str.[0]}'"))
+        return raise (MalformedMessageException($"Invalid type tag. Expected ',' but got '{str.[0]}'"))
     else
         return str.[1..str.Length-1]
+}
+
+let parseOscAddressPatternAsync (input: Stream) = async {
+    let! str = parseOscStringAsync input
+    if str.Length = 0 then
+        return raise (MalformedMessageException($"Invalid address pattern. Expected '/' but got null"))
+    elif str.[0] <> '/' then
+        return raise (MalformedMessageException($"Invalid address pattern. Expected '/' but got '{str.[0]}'"))
+    else return str
+}
+
+let parseOscMessageAsync (input: Stream) = async {
+    let! addr = parseOscAddressPatternAsync input
+    let! typeTag = parseOscTypeTagAsync input
+    let! args =
+        typeTag
+        |> Seq.map (fun tag ->
+            match tag with
+            | 'i' -> parseOscInt32Async input |> Async.map OscInt32
+            | 'f' -> parseOscFloat32Async input |> Async.map OscFloat32
+            | 's' | 'S' -> parseOscStringAsync input |> Async.map OscString
+            | _ -> raise (MalformedMessageException($"Unknown data type tag '{tag}'"))
+        )
+        |> Async.Sequential
+    return { addressPattern = addr; arguments = Array.toList args }
 }
 
 

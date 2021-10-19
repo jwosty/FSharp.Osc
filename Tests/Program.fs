@@ -204,6 +204,14 @@ let tests =
             })
         ]
         testList (nameof(parseOscTypeTagAsync)) [
+            testCaseAsync "(no args)" (async {
+                use stream = new MemoryStream([|
+                    byte ','; 0uy;      0uy;      0uy
+                |])
+
+                let! result = parseOscTypeTagAsync stream
+                result |> Expect.equal (nameof(result)) ""
+            })
             testCaseAsync "i" (async {
                 use stream = new MemoryStream([|
                     byte ','; byte 'i'; 0uy;      0uy
@@ -237,6 +245,96 @@ let tests =
 
                 let! result = parseOscTypeTagAsync stream
                 result |> Expect.equal (nameof(result)) "fsis"
+            })
+        ]
+        testList (nameof(parseOscAddressPatternAsync)) [
+            testCaseAsync "/foo/bar" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'f'; byte 'o'; byte 'o'
+                    byte '/'; byte 'b'; byte 'a'; byte 'r'
+                    0uy;      0uy;      0uy;      0uy
+                |])
+
+                let! result = parseOscAddressPatternAsync stream
+                result |> Expect.equal (nameof(result)) "/foo/bar"
+            })
+        ]
+        testList (nameof(parseOscMessageAsync)) [
+            testCaseAsync "/foo with no args" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'f'; byte 'o'; byte 'o'
+                    0uy;      0uy;      0uy;      0uy
+                    byte ','; 0uy;      0uy;      0uy
+                |])
+
+                let! result = parseOscMessageAsync stream
+                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo"; arguments = [] })
+            })
+            testCaseAsync "/bar with no args" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'b'; byte 'a'; byte 'r'
+                    0uy;      0uy;      0uy;      0uy
+                    byte ','; 0uy;      0uy;      0uy
+                |])
+
+                let! result = parseOscMessageAsync stream
+                result |> Expect.equal (nameof(result)) ({ addressPattern = "/bar"; arguments = [] })
+            })
+            testCaseAsync "/foo/bar with an int arg" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'f'; byte 'o'; byte 'o'
+                    byte '/'; byte 'b'; byte 'a'; byte 'r'
+                    0uy;      0uy;      0uy;      0uy
+                    byte ','; byte 'i'; 0uy;      0uy
+                    0x00uy;   0x00uy;   0x03uy;   0xE8uy    // 1000
+                |])
+
+                let! result = parseOscMessageAsync stream
+                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscInt32 1000] })
+            })
+            testCaseAsync "/foo/bar with two int args" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'f'; byte 'o'; byte 'o'  
+                    byte '/'; byte 'b'; byte 'a'; byte 'r'  // /foo/bar
+                    0uy;      0uy;      0uy;      0uy
+                    byte ','; byte 'i'; byte 'i'; 0uy       // ,ii
+                    0x00uy;   0x1Euy;   0x84uy;   0x80uy    // 2_000_000
+                    0x00uy;   0x00uy;   0x03uy;   0xE8uy    // 1000
+                |])
+
+                let! result = parseOscMessageAsync stream
+                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscInt32 2_000_000; OscInt32 1000] })
+            })
+            testCaseAsync "/foo/bar with a string and float arg" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'f'; byte 'o'; byte 'o'  
+                    byte '/'; byte 'b'; byte 'a'; byte 'r'  // /foo/bar
+                    0uy;      0uy;      0uy;      0uy
+                    byte ','; byte 's'; byte 'f'; 0uy       // ,sf
+                    byte 'h'; byte 'e'; byte 'l'; byte 'l'  // hello!
+                    byte 'o'; byte '!'; 0uy;      0uy
+                    0x42uy;   0x28uy;   0x00uy;   0x00uy    // 42.0
+                |])
+
+                let! result = parseOscMessageAsync stream
+                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscString "hello!"; OscFloat32 42.f] })
+            })
+            testCaseAsync "/foo/bar with a float string and two int args" (async {
+                use stream = new MemoryStream([|
+                    byte '/'; byte 'f'; byte 'o'; byte 'o'  // /foo/bar
+                    byte '/'; byte 'b'; byte 'a'; byte 'r'  
+                    0uy;      0uy;      0uy;      0uy
+                    byte ','; byte 'f'; byte 'S'; byte 'i'  // ,fSii
+                    byte 'i'; 0uy;      0uy;      0uy
+                    0xC1uy;   0x4Cuy;   0x00uy;   0x00uy    // -12.75
+                    byte 'D'; byte 'a'; byte 't'; byte 'a'  // Data.
+                    byte '.'; 0uy;      0uy;      0uy
+                    0xFFuy;   0xFFuy;   0xFFuy;   0x9Cuy    // -100
+                    0x00uy;   0x00uy;   0x00uy;   0x0Fuy    // 15
+                |])
+
+                let! result = parseOscMessageAsync stream
+                result |> Expect.equal (nameof(result)) ({ addressPattern = "/foo/bar"; arguments = [OscFloat32 -12.75f; OscString "Data."; OscInt32 -100; OscInt32 15] })
             })
         ]
     ]
