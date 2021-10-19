@@ -7,11 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="SimpleServer.fsx" />
+    <None Include="SimpleClient.fsx" />
     <Compile Include="Osc.fs" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="System.Memory" Version="4.5.4" />
-  </ItemGroup>
+  <ItemGroup />
 
 </Project>

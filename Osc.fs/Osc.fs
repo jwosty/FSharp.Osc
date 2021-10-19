@@ -5,6 +5,7 @@ open System.IO
 open System.Runtime.CompilerServices
 open System.Text
 open System.Text.RegularExpressions
+open System.Threading
 open System.Runtime.InteropServices
 open FSharp.NativeInterop
 
@@ -25,6 +26,8 @@ let private raiseImpossible () = raise (InvalidOperationException("This should n
 
 // OSC spec: http://opensoundcontrol.org/spec-1_0.html
 
+// TODO: time tags and bundles
+
 //[<IsByRefLike; Struct>]
 type OscAtom =
     /// 32-bit big-endian signed two's complement integer
@@ -35,7 +38,8 @@ type OscAtom =
     /// A sequence of non-null ASCII characters followed by a null, followed by 0-3 additional null characters to make
     /// the total number of bits a multiple of 32.
     | OscString of stringValue:string
-    //| OscBlob of blobData:Span<byte>
+    /// Arbitrary binary data
+    | OscBlob of blobData:byte[]
 
 type OscMessage = { addressPattern: string; arguments: OscAtom list }
 
@@ -91,8 +95,15 @@ let parseOscStringAsync (input: Stream) = async {
     return String.Concat(strs)
 }
 
-let internal paddingBuffers = [|
+let internal strPaddingBuffers = [|
     [|0uy;0uy;0uy;0uy|]
+    [|0uy;0uy;0uy|]
+    [|0uy;0uy|]
+    [|0uy|]
+|]
+
+let internal blobPaddingBuffers = [|
+    [||]
     [|0uy;0uy;0uy|]
     [|0uy;0uy|]
     [|0uy|]
@@ -101,7 +112,22 @@ let internal paddingBuffers = [|
 let writeOscStringAsync (output: Stream) (value: string) = async {
     let bytes = Encoding.ASCII.GetBytes value
     do! output.AsyncWrite bytes
-    do! output.AsyncWrite (paddingBuffers.[value.Length % 4])
+    do! output.AsyncWrite (strPaddingBuffers.[value.Length % 4])
+}
+
+let parseOscBlobAsync (input: Stream) = async {
+    let! size = parseOscInt32Async input
+    let! data = input.AsyncRead size
+    let paddingSize = 3 - ((size + 3) % 4)
+    if paddingSize > 0 then
+        input.Seek (int64 paddingSize, SeekOrigin.Current) |> ignore
+    return data
+}
+
+let writeOscBlobAsync (output: Stream) (value: byte[]) = async {
+    do! writeOscInt32Async output value.Length
+    do! output.AsyncWrite value
+    do! output.AsyncWrite (blobPaddingBuffers.[value.Length % 4])
 }
 
 let parseOscTypeTagAsync (input: Stream) = async {
@@ -120,7 +146,7 @@ let writeOscTypeTagAsync (output: Stream) (value: string) = async {
     let bytes = Encoding.ASCII.GetBytes value
     do! output.AsyncWrite commaBuf
     do! output.AsyncWrite bytes
-    do! output.AsyncWrite (paddingBuffers.[(bytes.Length + 1) % 4])
+    do! output.AsyncWrite (strPaddingBuffers.[(bytes.Length + 1) % 4])
 }
 
 let parseOscAddressPatternAsync (input: Stream) = async {
@@ -146,6 +172,7 @@ let parseOscMessageAsync (input: Stream) = async {
             | 'i' -> parseOscInt32Async input |> Async.map OscInt32
             | 'f' -> parseOscFloat32Async input |> Async.map OscFloat32
             | 's' | 'S' -> parseOscStringAsync input |> Async.map OscString
+            | 'b' -> parseOscBlobAsync input |> Async.map OscBlob
             | _ -> raise (MalformedMessageException($"Unknown data type tag '{tag}'"))
         )
         |> Async.Sequential
@@ -161,6 +188,7 @@ let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
             | OscInt32 x -> 'i', (fun () -> writeOscInt32Async output x)
             | OscFloat32 x -> 'f', (fun () -> writeOscFloat32Async output x)
             | OscString x -> 's', (fun () -> writeOscStringAsync output x)
+            | OscBlob x -> 'b', (fun () -> writeOscBlobAsync output x)
         )
         |> Seq.toArray
         |> Array.unzip
@@ -168,7 +196,6 @@ let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
     do! writeOscTypeTagAsync output typeTag
     for writeFunc in writeFuncs do
         do! writeFunc ()
-    ()
 }
 
 type DispatchTable =
@@ -177,28 +204,131 @@ type DispatchTable =
 
 let internal pathPartRegexes = ConcurrentDictionary<string, Regex>()
 
+// matches the OSC address pattern {foo,bar,baz}
+let internal orListPatternRegex = Regex("""\{.*\}""")
+
 let internal getPathPartRegex (pattern: string) =
     match pathPartRegexes.TryGetValue pattern with
     | true, r -> r
     | false, _ ->
-        let inner = pattern.Replace("*", ".*").Replace("?", ".?")
-        let r = Regex($"^{inner}$")
+        let inner =
+            pattern
+                // escape unintended regex special symbols
+                .Replace("\\", "\\\\").Replace("|", "\\|").Replace("+", "\\+")
+                .Replace("$", "\\$").Replace("^", "\\^").Replace(".", "\\.").Replace("(", "\\(").Replace(")","\\)")
+                // '*' '?' and '[!abc]' patterns
+                .Replace("*", ".*").Replace("?", ".?").Replace("[!", "[^")
+        // '{foo,bar,baz}' pattern which we translate into the regex group '(foo|bar|baz)'
+        let inner' = orListPatternRegex.Replace (inner, (fun m -> m.Value.Replace(",", "|").Replace("{","(").Replace("}",")")))
+        // char classes just fall thru; OSC class chars are valid regex class chars too
+        let r = Regex($"^{inner'}$")
         pathPartRegexes.[pattern] <- r
         r
 
 let dispatchMessage table (msg: OscMessage) = async {
+    let mutable anyDispatched = false
     let rec dispatchMessageInner table msg path = async {
         match path, table with
+        // represents the // wildcard, like in foo//bar. This will get split out to ["foo";"";"bar"], and we want to
+        // allow the "//" (which becomes "") to match to multiple levels of paths
+        | ""::partAfterMultilevelWildcard::rest, Path (name, children) ->
+            let p = if (getPathPartRegex partAfterMultilevelWildcard).IsMatch name then rest else path
+            for child in children do
+                do! dispatchMessageInner child msg p
+        // same as above
+        | ""::partAfterMultilevelWildcard::_, Method (name, methodFunc) ->
+            if (getPathPartRegex partAfterMultilevelWildcard).IsMatch name then
+                do! methodFunc msg
         | part::rest, Path (name, children) when (getPathPartRegex part).IsMatch name ->
             for child in children do
                 do! dispatchMessageInner child msg rest
         | part::_, Method (name, methodFunc) when (getPathPartRegex part).IsMatch name ->
+            anyDispatched <- true
             do! methodFunc msg
         | _ ->
             ()
     }
     let parts = msg.addressPattern.TrimStart('/').Split('/') |> Array.toList
     for node in table do
-        return! dispatchMessageInner node msg parts
+        do! dispatchMessageInner node msg parts
+    if not anyDispatched then
+        eprintfn "%s did not match any methods" msg.addressPattern
 }
 
+
+open System.Net
+open System.Net.Sockets
+
+let private resetMemoryStream (stream: MemoryStream) =
+    let buffer = stream.GetBuffer ()
+    Array.Clear (buffer, 0, buffer.Length)
+    stream.Position <- 0L
+    stream.SetLength 0L
+
+type OscUdpClient(hostname: string, port: int) =
+    let udpClient = new UdpClient(hostname, port)
+    let tempStream = new MemoryStream()
+
+    member this.SendMessageAsync (msg: OscMessage) = async {
+        resetMemoryStream tempStream
+
+        // Reading the spec makes it sound like you're supposed to write the size of the OSC packet before the data
+        // itself, but the two other OSC implementations I've tested this against (https://github.com/attwad/python-osc
+        // and https://github.com/RandomStudio/osc-simulator) skip that part... Am I misunderstanding something, or are
+        // both of those libraries wrong?
+        //tempStream.Seek (4L, SeekOrigin.Current) |> ignore
+        do! writeOscMessageAsync tempStream msg
+        do! Async.AwaitTask (tempStream.FlushAsync ())
+        //tempStream.Position <- 0L
+        //let packetSize = (int tempStream.Length) - 4
+        //do! writeOscInt32Async tempStream packetSize
+        let buffer = tempStream.GetBuffer ()
+        let! result = Async.AwaitTask (udpClient.SendAsync (buffer, int tempStream.Length))
+        return result
+    }
+
+    member this.SendMessage msg = Async.RunSynchronously (this.SendMessageAsync msg)
+
+    member this.Dispose () =
+        udpClient.Dispose ()
+        tempStream.Dispose ()
+    interface IDisposable with
+        override this.Dispose () = ()
+
+type OscUdpServer(hostname: string, port: int, methods: DispatchTable list) =
+
+    let cts = new CancellationTokenSource()
+    let mutable running = false
+
+    member val Methods = methods with get, set
+
+    member private this.MessageLoop (udpClient: UdpClient) = async {
+        while true do
+            try
+                let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
+                let stream = new MemoryStream(data.Buffer)
+                let! msg = parseOscMessageAsync stream
+                Async.Start (dispatchMessage this.Methods msg)
+            with e ->
+                eprintfn "Error processing packet: %s" (string e)
+    }
+
+    member private this.Start () = async {
+        if running then raise (IOException("Server already listening"))
+        use udpClient = new UdpClient()
+        udpClient.Client.Bind (IPEndPoint (IPAddress.Parse hostname, port))
+        printfn "Listening for packets on %s:%d" hostname port
+        do! this.MessageLoop udpClient
+    }
+
+    member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
+    member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
+
+    member this.Dispose () =
+        try
+            cts.Cancel ()
+        finally
+            cts.Dispose ()
+
+    interface IDisposable with
+        member this.Dispose () = this.Dispose ()

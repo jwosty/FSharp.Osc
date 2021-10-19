@@ -1,5 +1,6 @@
 ﻿module Osc.fs.Tests
 open System
+open System.Collections.Concurrent
 open System.IO
 open Expecto
 open Expecto.Flip
@@ -108,6 +109,42 @@ let tests =
                 makeParseAndWriteTests Expect.equal parseOscStringAsync writeOscStringAsync value value bytes
             )
         )
+        testList (nameof(parseOscBlobAsync)) (
+            [
+                "8 bytes",
+                    [| 1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy |],
+                    [| 0x00uy; 0x00uy; 0x00uy; 0x08uy
+                       1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy |]
+                "9 bytes",
+                    [| 1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy
+                       23uy;                        |],
+                    [| 0x00uy; 0x00uy; 0x00uy; 0x09uy
+                       1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy;
+                       23uy;   0uy;   0uy;    0uy   |]
+                "10 bytes",
+                    [| 1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy
+                       23uy;   24uy                 |],
+                    [| 0x00uy; 0x00uy; 0x00uy; 0x0Auy
+                       1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy;
+                       23uy;   24uy;   0uy;    0uy  |]
+                "11 bytes",
+                    [| 1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy
+                       23uy;   24uy;   25uy         |],
+                    [| 0x00uy; 0x00uy; 0x00uy; 0x0Buy
+                       1uy;    2uy;    3uy;    4uy
+                       100uy;  99uy;   98uy;   97uy;
+                       23uy;   24uy;   25uy;    0uy  |]
+            ] |> List.map (fun (name, value, bytes) ->
+                makeParseAndWriteTests Expect.equal parseOscBlobAsync writeOscBlobAsync name value bytes
+            )
+        )
         testList (nameof(parseOscTypeTagAsync)) (
             [
                 "",             [| byte ','; 0x00uy;   0x00uy;   0x00uy |]
@@ -168,6 +205,45 @@ let tests =
                        byte 'h'; byte 'e'; byte 'l'; byte 'l'  // hello!
                        byte 'o'; byte '!'; 0uy;      0uy
                        0x42uy;   0x28uy;   0x00uy;   0x00uy |] // 42.0
+                "/foo/bar with a blob of size 4 and float arg",
+                    { addressPattern = "/foo/*"; arguments = [OscBlob [|10uy;20uy;30uy;40uy|]; OscFloat32 42.f] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'  // address /foo /*
+                       byte '/'; byte '*'; 0x00uy;   0x00uy    
+                       byte ','; byte 'b'; byte 'f'; 0x00uy    // types blob and float
+                       0x00uy;   0x00uy;   0x00uy;   0x04uy    // the blob is 4 bytes large
+                       10uy;     20uy;     30uy;     40uy      // blob data
+                       0x42uy;   0x28uy;   0x00uy;   0x00uy    // float value 42.f
+                    |]
+                "/foo/bar with a blob of size 5 and float arg",
+                { addressPattern = "/foo/*"; arguments = [OscBlob [|10uy;20uy;30uy;40uy;50uy|]; OscFloat32 42.f] },
+                [| byte '/'; byte 'f'; byte 'o'; byte 'o'  // address /foo /*
+                   byte '/'; byte '*'; 0x00uy;   0x00uy    
+                   byte ','; byte 'b'; byte 'f'; 0x00uy    // types blob and float
+                   0x00uy;   0x00uy;   0x00uy;   0x05uy    // the blob is 4 bytes large
+                   10uy;     20uy;     30uy;     40uy      // blob data
+                   50uy;     0uy;      0uy;      0uy       
+                   0x42uy;   0x28uy;   0x00uy;   0x00uy    // float value 42.f
+                |] 
+                "/foo/bar with a blob of size 6 and float arg",
+                { addressPattern = "/foo/*"; arguments = [OscBlob [|10uy;20uy;30uy;40uy;50uy;60uy|]; OscFloat32 42.f] },
+                [| byte '/'; byte 'f'; byte 'o'; byte 'o'  // address /foo /*
+                   byte '/'; byte '*'; 0x00uy;   0x00uy    
+                   byte ','; byte 'b'; byte 'f'; 0x00uy    // types blob and float
+                   0x00uy;   0x00uy;   0x00uy;   0x06uy    // the blob is 4 bytes large
+                   10uy;     20uy;     30uy;     40uy      // blob data
+                   50uy;     60uy;     0uy;      0uy       
+                   0x42uy;   0x28uy;   0x00uy;   0x00uy    // float value 42.f
+                |] 
+                "/foo/bar with a blob of size 7 and float arg",
+                { addressPattern = "/foo/*"; arguments = [OscBlob [|10uy;20uy;30uy;40uy;50uy;60uy;70uy|]; OscFloat32 42.f] },
+                [| byte '/'; byte 'f'; byte 'o'; byte 'o'  // address /foo /*
+                   byte '/'; byte '*'; 0x00uy;   0x00uy    
+                   byte ','; byte 'b'; byte 'f'; 0x00uy    // types blob and float
+                   0x00uy;   0x00uy;   0x00uy;   0x07uy    // the blob is 4 bytes large
+                   10uy;     20uy;     30uy;     40uy      // blob data
+                   50uy;     60uy;     70uy;     0uy       
+                   0x42uy;   0x28uy;   0x00uy;   0x00uy    // float value 42.f
+                |] 
                 // examples straight from http://opensoundcontrol.org/spec-1_0-examples.html#osc-message-examples
                 "OSC spec example 1",
                     { addressPattern = "/oscillator/4/frequency"; arguments = [OscFloat32 440.f] },
@@ -277,6 +353,251 @@ let tests =
                 do! dispatchMessage table msg
                 Expect.isTrue "/foo/bar method called" fooBar1Called
                 Expect.isTrue "/foo/baz method called" fooBaz1Called
+            })
+            testCaseAsync "/be[ae3]r/1" (async {
+                let mutable bear1Called = false
+                let mutable beer1Called = false
+                let mutable be3r1Called = false
+                let msg = { addressPattern = "/be[ae3]r/1"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Path ("ber", [
+                        NoCallMethod "1"
+                    ])
+                    Path ("bear", [
+                        Method ("1", (fun m -> async { Expect.equal "/bear/1 msg" msg m; bear1Called <- true } ))
+                        NoCallMethod "11"
+                    ])
+                    Path ("beer", [
+                        NoCallMethod "beer"
+                        Method ("1", (fun m -> async { Expect.equal "/beer/1 msg" msg m; beer1Called <- true } ))
+                    ])
+                    Path ("be3r", [
+                        NoCallMethod "2"
+                        Method ("1", (fun m -> async { Expect.equal "/beer/1 msg" msg m; beer1Called <- true } ))
+                    ])
+                    Path ("bexr", [
+                        NoCallMethod "1"
+                    ])
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/bear/1 method called" bear1Called
+                Expect.isTrue "/beer/1 method called" beer1Called
+            })
+            testCaseAsync "/foo/bar/[2-5]" (async {
+                let calls = ConcurrentBag()
+                let f name msg m = async {
+                    Expect.equal $"{name} msg" msg m
+                    calls.Add name
+                }
+                let msg = { addressPattern = "/foo/bar/[2-5]"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Path ("foo", [
+                        Path ("bar", [
+                            NoCallMethod "1"
+                            Method ("2", f "/foo/bar/2" msg)
+                            Method ("3", f "/foo/bar/3" msg)
+                            Method ("4", f "/foo/bar/4" msg)
+                            Method ("5", f "/foo/bar/5" msg)
+                            NoCallMethod "11"
+                            NoCallMethod "20"
+                            NoCallMethod "23"
+                            NoCallMethod "abc"
+                            NoCallMethod "[2-5]"
+                        ])
+                        Path ("baz", [
+                            NoCallMethod "11"
+                            NoCallMethod "3"
+                            NoCallMethod "zoo"
+                        ])
+                        Path ("qux", [
+                            NoCallMethod "1"
+                            NoCallMethod "thing"
+                            NoCallMethod "4"
+                        ])
+                    ])
+                ]
+
+                do! dispatchMessage table msg
+                calls |> Expect.containsAll "" ["/foo/bar/2"; "/foo/bar/3"; "/foo/bar/4"; "/foo/bar/5"]
+            })
+            testCaseAsync "/foo/bar/[!2-5]*" (async {
+                let calls = ConcurrentBag()
+                let f name msg m = async {
+                    Expect.equal $"{name} msg" msg m
+                    calls.Add name
+                }
+                let msg = { addressPattern = "/foo/bar/[!2-5]*"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Path ("foo", [
+                        Path ("bar", [
+                            Method ("1", f "/foo/bar/1" msg)
+                            NoCallMethod "2"
+                            NoCallMethod "3"
+                            NoCallMethod "4"
+                            NoCallMethod "5"
+                            Method ("11", f "/foo/bar/11" msg)
+                            NoCallMethod "20"
+                            NoCallMethod "23"
+                            Method ("abc", f "/foo/bar/abc" msg)
+                        ])
+                        Path ("baz", [
+                            NoCallMethod "11"
+                            NoCallMethod "3"
+                            NoCallMethod "zoo"
+                        ])
+                        Path ("qux", [
+                            NoCallMethod "1"
+                            NoCallMethod "thing"
+                            NoCallMethod "4"
+                        ])
+                    ])
+                ]
+
+                do! dispatchMessage table msg
+                calls |> Expect.containsAll "" ["/foo/bar/1"; "/foo/bar/11"; "/foo/bar/abc"]
+            })
+            testCaseAsync "/foo{bar,baz}/xyz" (async {
+                let calls = ConcurrentBag()
+                let f name msg m = async {
+                    Expect.equal $"{name} msg" msg m
+                    calls.Add name
+                }
+                let msg = { addressPattern = "/foo{bar,baz}/xyz"; arguments = [OscFloat32 -25.f; OscFloat32 -26.f] }
+                let table = [
+                    Path ("foobar", [
+                        NoCallMethod "abc"
+                        Method ("xyz", f "/foobar/xyz" msg)
+                    ])
+                    Path ("foobaz", [
+                        Method ("xyz", f "/foobaz/xyz" msg)
+                        NoCallMethod "xyza"
+                        NoCallMethod "axyz"
+                        NoCallMethod "abc"
+                    ])
+                    Path ("fooqux", [
+                        NoCallMethod "1"
+                        NoCallMethod "thing"
+                        NoCallMethod "4"
+                    ])
+                ]
+
+                do! dispatchMessage table msg
+                calls |> Expect.containsAll "" ["/foobar/xyz"; "/foobaz/xyz"]
+            })
+            // OSC 1.1 http://opensoundcontrol.org/files/2009-NIME-OSC-1.1.pdf
+            testCaseAsync "/foo//xyz" (async {
+                let calls = ConcurrentBag()
+                let f name msg m = async {
+                    Expect.equal $"{name} msg" msg m
+                    calls.Add name
+                }
+                let msg = { addressPattern = "/foo//xyz"; arguments = [OscFloat32 -25.f; OscFloat32 -26.f] }
+                let table = [
+                    Path ("foo", [
+                        Path ("bar", [
+                            Path ("baz", [
+                                Method ("xyz", f "/foo/bar/baz/xyz" msg)
+                                NoCallMethod "blah"
+                            ])
+                            Path ("qux", [
+                                Method ("xyz", f "/foo/bar/qux/xyz" msg)
+                                NoCallMethod "hmm"
+                            ])
+                        ])  
+                        Path ("abc", [
+                            Method ("xyz", f "/foo/abc/xyz" msg)
+                            NoCallMethod "nope"
+                            Path ("def", [
+                                Method ("xyz", f "/foo/abc/def/xyz" msg)
+                            ])
+                        ])
+                        Method ("xyz", f "/foo/xyz" msg)
+                    ])
+                ]
+
+                do! dispatchMessage table msg
+                calls |> Expect.containsAll "" ["/foo/bar/baz/xyz"; "/foo/bar/qux/xyz"; "/foo/abc/xyz"; "/foo/abc/def/xyz"; "/foo/xyz"]
+            })
+            // making sure to escape regex chars when they're not part of the OSC spec
+            testCaseAsync "/fo|bar/baz" (async {
+                let mutable fobarCalled = false
+                let msg = { addressPattern = "/fo|bar/baz"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Path ("fo|bar", [
+                         Method ("baz", (fun m -> async { Expect.equal "fo|bar/baz msg" msg m; fobarCalled <- true } ))
+                    ])
+                    NoCallMethod "fo"
+                    Path ("bar", [
+                        NoCallMethod "baz"
+                    ])
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/fo|bar method called" fobarCalled
+            })
+            testCaseAsync "/fo+bar" (async {
+                let mutable fobarCalled = false
+                let msg = { addressPattern = "/fo+bar"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    NoCallMethod "foobar"
+                    Method ("fo+bar", (fun m -> async { Expect.equal "fo+bar msg" msg m; fobarCalled <- true } ))
+                    NoCallMethod "fooobar"
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/fo+bar method called" fobarCalled
+            })
+            testCaseAsync "/fo$o" (async {
+                let mutable fooCalled = false
+                let msg = { addressPattern = "/fo$o"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    NoCallMethod "ar"
+                    Method ("fo$o", (fun m -> async { Expect.equal "/fo$o msg" msg m; fooCalled <- true } ))
+                    NoCallMethod "fo"
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/fo$ar method called" fooCalled
+            })
+            testCaseAsync "/fo^o" (async {
+                let mutable fooCalled = false
+                let msg = { addressPattern = "/fo^o"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    NoCallMethod "ar"
+                    Method ("fo^o", (fun m -> async { Expect.equal "/fo^o msg" msg m; fooCalled <- true } ))
+                    NoCallMethod "fo"
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/fo^ar method called" fooCalled
+            })
+            testCaseAsync "/foo dot bar" (async {
+                let mutable foobarCalled = false
+                let msg = { addressPattern = "/foo.bar"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    NoCallMethod "fooxbar"
+                    Method ("foo.bar", (fun m -> async { Expect.equal "/foo.bar msg" msg m; foobarCalled <- true } ))
+                    NoCallMethod "foobar"
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo.bar method called" foobarCalled
+            })
+            testCaseAsync "/foo\\dbar" (async {
+                let mutable foobarCalled = false
+                let msg = { addressPattern = "/foo\\dbar"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    NoCallMethod "foo4bar"
+                    Method ("foo\\dbar", (fun m -> async { Expect.equal "/foo\\dbar msg" msg m; foobarCalled <- true } ))
+                    NoCallMethod "foobar"
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo\\dbar method called" foobarCalled
+            })
+            testCaseAsync "/foo(bar)" (async {
+                let mutable foobarCalled = false
+                let msg = { addressPattern = "/foo(bar)"; arguments = [OscString "I am an argument"] }
+                let table = [
+                    Method ("foo(bar)", (fun m -> async { Expect.equal "/foo(bar) msg" msg m; foobarCalled <- true } ))
+                    NoCallMethod "foobar"
+                ]
+                do! dispatchMessage table msg
+                Expect.isTrue "/foo(bar) method called" foobarCalled
             })
         ]
     ]
