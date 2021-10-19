@@ -26,12 +26,12 @@ let (|SomeOscFloat32|) x =
     | Some (OscFloat32 x') -> SomeOscFloat32 x'
     | _ -> raise (AssertException($"Was not Ok({nameof(OscFloat32)})"))
 
-let makeParseAndWriteTests fParse fWrite name data (bytes: byte[]) =
+let makeParseAndWriteTests eq fParse fWrite name data (bytes: byte[]) =
     testList name [
         testCaseAsync "Parse" (async {
             use stream = new MemoryStream(bytes)
             let! result = fParse stream
-            result |> Expect.equal "Parsed data" data
+            result |> eq "Parsed data" data
         })
         testCaseAsync "Write" (async {
             use stream = new MemoryStream()
@@ -46,140 +46,61 @@ let makeParseAndWriteTests fParse fWrite name data (bytes: byte[]) =
 
 [<Tests>]
 let tests =
-    testList ("Osc.fs") [
+    testList "Osc.fs" [
         testList (nameof(parseOscInt32Async)) (
-            [   0,              [|0x00uy; 0x00uy; 0x00uy; 0x00uy |]
-                10,             [|0x00uy; 0x00uy; 0x00uy; 0x0Auy |]
-                1_000,          [|0x00uy; 0x00uy; 0x03uy; 0xE8uy |]
-                1_000_000,      [|0x00uy; 0x0Fuy; 0x42uy; 0x40uy |]
-                1_000_000_023,  [|0x3Buy; 0x9Auy; 0xCAuy; 0x17uy |]
-            ]
-            |> List.map (fun (value, bytes) -> makeParseAndWriteTests parseOscInt32Async writeOscInt32Async (string value) value bytes)
+            [   0,              [| 0x00uy; 0x00uy; 0x00uy; 0x00uy |]
+                10,             [| 0x00uy; 0x00uy; 0x00uy; 0x0Auy |]
+                1_000,          [| 0x00uy; 0x00uy; 0x03uy; 0xE8uy |]
+                1_000_000,      [| 0x00uy; 0x0Fuy; 0x42uy; 0x40uy |]
+                1_000_000_023,  [| 0x3Buy; 0x9Auy; 0xCAuy; 0x17uy |]
+            ] |> List.map (fun (value, bytes) -> makeParseAndWriteTests Expect.equal parseOscInt32Async writeOscInt32Async (string value) value bytes)
         )
-        testList (nameof(parseOscFloat32Async)) [
-            testCaseAsync "0" (async {
-                use stream = new MemoryStream([|
-                    0uy; 0uy; 0uy; 0uy
-                |])
-                
-                let! result = parseOscFloat32Async stream
-                result |> Expect.equal "result" 0.f
-            })
-            testCaseAsync "1 point 234567936E9" (async {
-                use stream = new MemoryStream([|
-                    0x4Euy; 0x93uy; 0x2Cuy; 0x06uy
-                |])
-                let! result = parseOscFloat32Async stream
-                result |> Expect.float32Equal (nameof(result)) 1.234567936E9f
-            })
-            testCaseAsync "-123 point 45" (async {
-                use stream = new MemoryStream([|
-                    0xC2uy; 0xF6uy; 0xE6uy; 0x66uy
-                |])
-                let! result = parseOscFloat32Async stream
-                result |> Expect.float32Equal (nameof(result)) -123.45f
-            })
-            testCaseAsync "nan" (async {
-                use stream = new MemoryStream([|
-                    0x7Fuy; 0xFFuy; 0xFFuy; 0xFFuy
-                |])
-                let! result = parseOscFloat32Async stream
-                result |> Expect.float32Equal (nameof(result)) nanf
-            })
-            testCaseAsync "infinity" (async {
-                use stream = new MemoryStream([|
-                    0x7Fuy; 0x80uy; 0uy; 0uy
-                |])
+        testList (nameof(parseOscFloat32Async)) (
+            [   0.f,            [| 0x00uy; 0x00uy; 0x00uy; 0x00uy |]
+                1.234567936E9f, [| 0x4Euy; 0x93uy; 0x2Cuy; 0x06uy |]
+                -123.45f,       [| 0xC2uy; 0xF6uy; 0xE6uy; 0x66uy |]
+                nanf,           [| 0xFFuy; 0xC0uy; 0x00uy; 0x00uy |]
+                infinityf,      [| 0x7Fuy; 0x80uy; 0x00uy; 0x00uy |]
+            ] |> List.map (fun (value, bytes) ->
+                let str = value.ToString().Replace (".", " point ")
+                makeParseAndWriteTests Expect.float32Equal parseOscFloat32Async writeOscFloat32Async str value bytes)
+        )
+        testList (nameof(parseOscStringAsync)) (
+            [
+                "",             [| 0x00uy;   0x00uy;   0x00uy;   0x00uy |]
+                "a",            [| byte 'a'; 0x00uy;   0x00uy;   0x00uy |]
+                "AB",           [| byte 'A'; byte 'B'; 0x00uy;   0x00uy |]
+                "abc",          [| byte 'a'; byte 'b'; byte 'c'; 0x00uy |]
+                "XYZA",         [| byte 'X'; byte 'Y'; byte 'Z'; byte 'A'
+                                   0x00uy;   0x00uy;   0x00uy;   0x00uy |]
+                "XYZABC",       [| byte 'X'; byte 'Y'; byte 'Z'; byte 'A'
+                                   byte 'B'; byte 'C'; 0x00uy;   0x00uy |]
+                "Hello, to the world of OSC!", [|
+                                   byte 'H'; byte 'e'; byte 'l'; byte 'l'
+                                   byte 'o'; byte ','; byte ' '; byte 't'
+                                   byte 'o'; byte ' '; byte 't'; byte 'h'
+                                   byte 'e'; byte ' '; byte 'w'; byte 'o'
+                                   byte 'r'; byte 'l'; byte 'd'; byte ' '
+                                   byte 'o'; byte 'f'; byte ' '; byte 'O'
+                                   byte 'S'; byte 'C'; byte '!'; 0x00uy |]
+                "The quick brown fox jumped over the lazy dog.", [|
+                                   byte 'T'; byte 'h'; byte 'e'; byte ' '
+                                   byte 'q'; byte 'u'; byte 'i'; byte 'c'
+                                   byte 'k'; byte ' '; byte 'b'; byte 'r'
+                                   byte 'o'; byte 'w'; byte 'n'; byte ' '
+                                   byte 'f'; byte 'o'; byte 'x'; byte ' '
+                                   byte 'j'; byte 'u'; byte 'm'; byte 'p'
+                                   byte 'e'; byte 'd'; byte ' '; byte 'o'
+                                   byte 'v'; byte 'e'; byte 'r'; byte ' '
+                                   byte 't'; byte 'h'; byte 'e'; byte ' '
+                                   byte 'l'; byte 'a'; byte 'z'; byte 'y'
+                                   byte ' '; byte 'd'; byte 'o'; byte 'g'
+                                   byte '.'; 0x00uy;   0x00uy;   0x00uy |]
 
-                let! result = parseOscFloat32Async stream
-                result |> Expect.float32Equal (nameof(result)) infinityf
-            })
-        ]
-        testList (nameof(parseOscStringAsync)) [
-            testCaseAsync "empty string" (async {
-                use stream = new MemoryStream([|
-                    0uy; 0uy; 0uy; 0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) ""
-            })
-            testCaseAsync "a" (async {
-                use stream = new MemoryStream([|
-                    byte 'a'; 0uy; 0uy; 0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "a"
-            })
-            testCaseAsync "AB" (async {
-                use stream = new MemoryStream([|
-                    byte 'A'; byte 'B'; 0uy; 0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "AB"
-            })
-            testCaseAsync "abc" (async {
-                use stream = new MemoryStream([|
-                    byte 'a'; byte 'b'; byte 'c'; 0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "abc"
-            })
-            testCaseAsync "XYZA" (async {
-                use stream = new MemoryStream([|
-                    byte 'X'; byte 'Y'; byte 'Z'; byte 'A'
-                    0uy; 0uy; 0uy; 0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "XYZA"
-            })
-            testCaseAsync "XYZABC" (async {
-                use stream = new MemoryStream([|
-                    byte 'X'; byte 'Y'; byte 'Z'; byte 'A'
-                    byte 'B'; byte 'C'; 0uy;      0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "XYZABC"
-            })
-            testCaseAsync "Hello, to the world of OSC!" (async {
-                use stream = new MemoryStream([|
-                    byte 'H'; byte 'e'; byte 'l'; byte 'l'
-                    byte 'o'; byte ','; byte ' '; byte 't'
-                    byte 'o'; byte ' '; byte 't'; byte 'h'
-                    byte 'e'; byte ' '; byte 'w'; byte 'o'
-                    byte 'r'; byte 'l'; byte 'd'; byte ' '
-                    byte 'o'; byte 'f'; byte ' '; byte 'O'
-                    byte 'S'; byte 'C'; byte '!'; 0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "Hello, to the world of OSC!"
-            })
-            testCaseAsync "The quick brown fox jumped over the lazy dog." (async {
-                use stream = new MemoryStream([|
-                    byte 'T'; byte 'h'; byte 'e'; byte ' '
-                    byte 'q'; byte 'u'; byte 'i'; byte 'c'
-                    byte 'k'; byte ' '; byte 'b'; byte 'r'
-                    byte 'o'; byte 'w'; byte 'n'; byte ' '
-                    byte 'f'; byte 'o'; byte 'x'; byte ' '
-                    byte 'j'; byte 'u'; byte 'm'; byte 'p'
-                    byte 'e'; byte 'd'; byte ' '; byte 'o'
-                    byte 'v'; byte 'e'; byte 'r'; byte ' '
-                    byte 't'; byte 'h'; byte 'e'; byte ' '
-                    byte 'l'; byte 'a'; byte 'z'; byte 'y'
-                    byte ' '; byte 'd'; byte 'o'; byte 'g'
-                    byte '.'; 0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscStringAsync stream
-                result |> Expect.equal (nameof(result)) "The quick brown fox jumped over the lazy dog."
-            })
-        ]
+            ] |> List.map (fun (value, bytes) ->
+                makeParseAndWriteTests Expect.equal parseOscStringAsync writeOscStringAsync value value bytes
+            )
+        )
         testList (nameof(parseOscTypeTagAsync)) [
             testCaseAsync "(no args)" (async {
                 use stream = new MemoryStream([|

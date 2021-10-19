@@ -44,7 +44,7 @@ let parseOscInt32Async (input: Stream) = async {
     return BitConverter.ToInt32 (bytes', 0)
 }
 
-let writeOscInt32Async (output: Stream) (value: int) = async {
+let writeOscInt32Async (output: Stream) (value: int32) = async {
     let bytes = BitConverter.GetBytes value
     let bytes' = if BitConverter.IsLittleEndian then Array.rev bytes else bytes
     do! output.AsyncWrite bytes'
@@ -57,7 +57,11 @@ let parseOscFloat32Async (input: Stream) = async {
     return BitConverter.ToSingle (bytes', 0)
 }
 
-let writeOscFloat32Async (output: Stream) data = async { () }
+let writeOscFloat32Async (output: Stream) (value: float32) = async {
+    let bytes = BitConverter.GetBytes value
+    let bytes' = if BitConverter.IsLittleEndian then Array.rev bytes else bytes
+    do! output.AsyncWrite bytes'
+}
 
 let parseOscStringAsync (input: Stream) = async {
     let strs = System.Collections.Generic.List<string>()
@@ -65,7 +69,6 @@ let parseOscStringAsync (input: Stream) = async {
     let byteArr = Array.zeroCreate<byte> 4
     
     // FIXME: eliminiate any unnecessary extra allocations here
-    
 
     while cont do
         let! bytesRead = input.AsyncRead byteArr
@@ -86,7 +89,18 @@ let parseOscStringAsync (input: Stream) = async {
     return String.Concat(strs)
 }
 
-let writeOscStringAsync (output: Stream) data = async { () }
+let internal paddingBuffers = [|
+    [|0uy;0uy;0uy|]
+    [|0uy;0uy|]
+    [|0uy|]
+    [||]
+|]
+
+let writeOscStringAsync (output: Stream) (value: string) = async {
+    let bytes = Encoding.ASCII.GetBytes value
+    do! output.AsyncWrite bytes
+    do! output.AsyncWrite (paddingBuffers.[value.Length % 4])
+}
 
 let parseOscTypeTagAsync (input: Stream) = async {
     let! str = parseOscStringAsync input
