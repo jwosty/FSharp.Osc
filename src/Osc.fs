@@ -238,15 +238,18 @@ let dispatchMessage table (msg: OscMessage) = async {
         // same as above
         | ""::partAfterMultilevelWildcard::_, Method (name, methodFunc) ->
             if (getPathPartRegex partAfterMultilevelWildcard).IsMatch name then
-                do! methodFunc msg
+                match! Async.Catch (methodFunc msg) with
+                | Choice1Of2 () -> ()
+                | Choice2Of2 e -> eprintfn "Error during method dispatch: %O" e
         | part::rest, Path (name, children) when (getPathPartRegex part).IsMatch name ->
             for child in children do
                 do! dispatchMessageInner child msg rest
         | part::_, Method (name, methodFunc) when (getPathPartRegex part).IsMatch name ->
             anyDispatched <- true
-            do! methodFunc msg
-        | _ ->
-            ()
+            match! Async.Catch (methodFunc msg) with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 e -> eprintfn "Error during method dispatch: %O" e
+        | _ -> ()
     }
     let parts = msg.addressPattern.TrimStart('/').Split('/') |> Array.toList
     for node in table do
@@ -302,15 +305,22 @@ type OscUdpServer(hostname: string, port: int, methods: DispatchTable list) =
 
     member val Methods = methods with get, set
 
+    member private this.ReadAndProcessMessage (udpClient: UdpClient) = async {
+        let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
+        let stream = new MemoryStream(data.Buffer)
+        let! msg = parseOscMessageAsync stream
+        
+        dispatchMessage this.Methods msg
+        |> Async.Catch
+        |> Async.map (fun result -> match result with | Choice1Of2 () -> () | Choice2Of2 e -> eprintfn "Message dispatch failed: %O" e)
+        |> Async.Start
+    }
+
     member private this.MessageLoop (udpClient: UdpClient) = async {
         while true do
-            try
-                let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
-                let stream = new MemoryStream(data.Buffer)
-                let! msg = parseOscMessageAsync stream
-                Async.Start (dispatchMessage this.Methods msg)
-            with e ->
-                eprintfn "Error processing packet: %s" (string e)
+            match! Async.Catch (this.ReadAndProcessMessage udpClient) with
+            | Choice1Of2 result -> return result
+            | Choice2Of2 e -> eprintfn "Error processing packet: %s" (string e)
     }
 
     member private this.Start () = async {
