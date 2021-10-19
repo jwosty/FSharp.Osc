@@ -53,7 +53,8 @@ let tests =
                 1_000,          [| 0x00uy; 0x00uy; 0x03uy; 0xE8uy |]
                 1_000_000,      [| 0x00uy; 0x0Fuy; 0x42uy; 0x40uy |]
                 1_000_000_023,  [| 0x3Buy; 0x9Auy; 0xCAuy; 0x17uy |]
-            ] |> List.map (fun (value, bytes) -> makeParseAndWriteTests Expect.equal parseOscInt32Async writeOscInt32Async (string value) value bytes)
+            ] |> List.map (fun (value, bytes) ->
+                makeParseAndWriteTests Expect.equal parseOscInt32Async writeOscInt32Async (string value) value bytes)
         )
         testList (nameof(parseOscFloat32Async)) (
             [   0.f,            [| 0x00uy; 0x00uy; 0x00uy; 0x00uy |]
@@ -101,62 +102,30 @@ let tests =
                 makeParseAndWriteTests Expect.equal parseOscStringAsync writeOscStringAsync value value bytes
             )
         )
-        testList (nameof(parseOscTypeTagAsync)) [
-            testCaseAsync "(no args)" (async {
-                use stream = new MemoryStream([|
-                    byte ','; 0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscTypeTagAsync stream
-                result |> Expect.equal (nameof(result)) ""
-            })
-            testCaseAsync "i" (async {
-                use stream = new MemoryStream([|
-                    byte ','; byte 'i'; 0uy;      0uy
-                |])
-
-                let! result = parseOscTypeTagAsync stream
-                result |> Expect.equal (nameof(result)) "i"
-            })
-            testCaseAsync "if" (async {
-                use stream = new MemoryStream([|
-                    byte ','; byte 'i'; byte 'f';      0uy
-                |])
-
-                let! result = parseOscTypeTagAsync stream
-                result |> Expect.equal (nameof(result)) "if"
-            })
-            testCaseAsync "fss" (async {
-                use stream = new MemoryStream([|
-                    byte ','; byte 'f'; byte 's'; byte 's'
-                    0uy;      0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscTypeTagAsync stream
-                result |> Expect.equal (nameof(result)) "fss"
-            })
-            testCaseAsync "fsis" (async {
-                use stream = new MemoryStream([|
-                    byte ','; byte 'f'; byte 's'; byte 'i'
-                    byte 's'; 0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscTypeTagAsync stream
-                result |> Expect.equal (nameof(result)) "fsis"
-            })
-        ]
-        testList (nameof(parseOscAddressPatternAsync)) [
-            testCaseAsync "/foo/bar" (async {
-                use stream = new MemoryStream([|
-                    byte '/'; byte 'f'; byte 'o'; byte 'o'
-                    byte '/'; byte 'b'; byte 'a'; byte 'r'
-                    0uy;      0uy;      0uy;      0uy
-                |])
-
-                let! result = parseOscAddressPatternAsync stream
-                result |> Expect.equal (nameof(result)) "/foo/bar"
-            })
-        ]
+        testList (nameof(parseOscTypeTagAsync)) (
+            [
+                "",             [| byte ','; 0x00uy;   0x00uy;   0x00uy |]
+                "i",            [| byte ','; byte 'i'; 0x00uy;   0x00uy |]
+                "if",           [| byte ','; byte 'i'; byte 'f'; 0x00uy |]
+                "fss",          [| byte ','; byte 'f'; byte 's'; byte 's'
+                                   0x00uy;   0x00uy;   0x00uy;   0x00uy |]
+                "fsis",         [| byte ','; byte 'f'; byte 's'; byte 'i'
+                                   byte 's'; 0x00uy;   0x00uy;   0x00uy |]
+            ]
+            |> List.map (fun (value, bytes) ->
+                makeParseAndWriteTests Expect.equal parseOscTypeTagAsync writeOscTypeTagAsync value value bytes
+            )
+        )
+        testList (nameof(parseOscAddressPatternAsync)) (
+            [
+                "/foo/bar",     [| byte '/'; byte 'f'; byte 'o'; byte 'o'
+                                   byte '/'; byte 'b'; byte 'a'; byte 'r'
+                                   0x00uy;   0x00uy;   0x00uy;   0x00uy |]
+            ]
+            |> List.map (fun (value, bytes) ->
+                makeParseAndWriteTests Expect.equal parseOscAddressPatternAsync writeOscAddressPatternAsync value value bytes
+            )
+        )
         testList (nameof(parseOscMessageAsync)) [
             testCaseAsync "/foo with no args" (async {
                 use stream = new MemoryStream([|

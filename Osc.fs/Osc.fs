@@ -112,6 +112,15 @@ let parseOscTypeTagAsync (input: Stream) = async {
         return str.[1..str.Length-1]
 }
 
+let internal commaBuf = [|byte ','|]
+
+let writeOscTypeTagAsync (output: Stream) (value: string) = async {
+    let bytes = Encoding.ASCII.GetBytes value
+    do! output.AsyncWrite commaBuf
+    do! output.AsyncWrite bytes
+    do! output.AsyncWrite (paddingBuffers.[(value.Length + 1) % 4])
+}
+
 let parseOscAddressPatternAsync (input: Stream) = async {
     let! str = parseOscStringAsync input
     if str.Length = 0 then
@@ -119,6 +128,10 @@ let parseOscAddressPatternAsync (input: Stream) = async {
     elif str.[0] <> '/' then
         return raise (MalformedMessageException($"Invalid address pattern. Expected '/' but got '{str.[0]}'"))
     else return str
+}
+
+let writeOscAddressPatternAsync (input: Stream) (value: string) = async {
+    do! writeOscStringAsync input value
 }
 
 let parseOscMessageAsync (input: Stream) = async {
@@ -137,4 +150,7 @@ let parseOscMessageAsync (input: Stream) = async {
     return { addressPattern = addr; arguments = Array.toList args }
 }
 
+let writeOscMessageAsync (input: Stream) (value: string) = async {
+    ()
+}
 
