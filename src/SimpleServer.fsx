@@ -50,6 +50,6 @@ let useUdp = false
 
 let server : IOscServer =
     if useUdp then upcast new OscUdpServer("127.0.0.1", port, methods)
-    else upcast new OscTcpServer(System.Net.IPAddress.Any, port, methods)
+    else raise (NotImplementedException()) (*upcast new OscTcpServer(System.Net.IPAddress.Any, port, methods)*)
 
 server.Run ()
