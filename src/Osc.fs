@@ -75,7 +75,6 @@ let parseOscStringAsync (input: Stream) = async {
     let byteArr = Array.zeroCreate<byte> 4
     
     // FIXME: eliminiate any unnecessary extra allocations here
-
     while cont do
         let! bytesRead = input.AsyncRead byteArr
         if bytesRead <> 4 then raiseUnexpectedEof ()
@@ -164,6 +163,7 @@ let writeOscAddressPatternAsync (input: Stream) (value: string) = async {
 
 let parseOscMessageAsync (input: Stream) = async {
     let! addr = parseOscAddressPatternAsync input
+    if addr = "#bundle" then raise (NotImplementedException "Bundles not yet supported")
     let! typeTag = parseOscTypeTagAsync input
     let! args =
         typeTag
@@ -262,46 +262,53 @@ let dispatchMessage table (msg: OscMessage) = async {
 open System.Net
 open System.Net.Sockets
 
+type IOscClient =
+    inherit IDisposable
+    abstract member SendMessageAsync : msg:OscMessage -> Async<unit>
+
+type IOscServer =
+    inherit IDisposable
+    abstract member Run : unit -> unit
+    abstract member RunInThreadPool : unit -> unit
+
 let private resetMemoryStream (stream: MemoryStream) =
     let buffer = stream.GetBuffer ()
     Array.Clear (buffer, 0, buffer.Length)
     stream.Position <- 0L
     stream.SetLength 0L
 
-type OscUdpClient(hostname: string, port: int) =
-    let udpClient = new UdpClient(hostname, port)
+type OscUdpClient(localEP: IPEndPoint) =
+    let udpClient = new UdpClient(localEP)
     let tempStream = new MemoryStream()
+
+    new(host: IPAddress, port: int) = new OscUdpClient(IPEndPoint(host, port))
+    new(host: string, port: int) = new OscUdpClient(IPAddress.Parse host, port)
 
     member this.SendMessageAsync (msg: OscMessage) = async {
         resetMemoryStream tempStream
 
-        // Reading the spec makes it sound like you're supposed to write the size of the OSC packet before the data
-        // itself, but the two other OSC implementations I've tested this against (https://github.com/attwad/python-osc
-        // and https://github.com/RandomStudio/osc-simulator) skip that part... Am I misunderstanding something, or are
-        // both of those libraries wrong?
-        //tempStream.Seek (4L, SeekOrigin.Current) |> ignore
         do! writeOscMessageAsync tempStream msg
         do! Async.AwaitTask (tempStream.FlushAsync ())
-        //tempStream.Position <- 0L
-        //let packetSize = (int tempStream.Length) - 4
-        //do! writeOscInt32Async tempStream packetSize
         let buffer = tempStream.GetBuffer ()
-        let! result = Async.AwaitTask (udpClient.SendAsync (buffer, int tempStream.Length))
-        return result
+        let! _ = Async.AwaitTask (udpClient.SendAsync (buffer, int tempStream.Length))
+        return ()
     }
-
-    member this.SendMessage msg = Async.RunSynchronously (this.SendMessageAsync msg)
 
     member this.Dispose () =
         udpClient.Dispose ()
         tempStream.Dispose ()
+
+    interface IOscClient with
+        override this.SendMessageAsync msg = this.SendMessageAsync msg
+
     interface IDisposable with
         override this.Dispose () = ()
 
-type OscUdpServer(hostname: string, port: int, methods: DispatchTable list) =
-
+type OscUdpServer(host: IPAddress, port: int, methods: DispatchTable list) =
     let cts = new CancellationTokenSource()
     let mutable running = false
+
+    new(host: string, port, methods) = new OscUdpServer(IPAddress.Parse host, port, methods)
 
     member val Methods = methods with get, set
 
@@ -326,15 +333,19 @@ type OscUdpServer(hostname: string, port: int, methods: DispatchTable list) =
     member private this.Start () = async {
         if running then raise (IOException("Server already listening"))
         use udpClient = new UdpClient()
-        udpClient.Client.Bind (IPEndPoint (IPAddress.Parse hostname, port))
-        printfn "Listening for packets on %s:%d" hostname port
+        udpClient.Client.Bind (IPEndPoint (host, port))
+        printfn "Listening for packets on %O:%d" host port
         do! this.MessageLoop udpClient
     }
 
     member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
     member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
 
-    member this.Dispose () =
+    interface IOscServer with
+        override this.Run () = this.Run ()
+        override this.RunInThreadPool () = this.RunInThreadPool ()
+
+    member _.Dispose () =
         try
             cts.Cancel ()
         finally
@@ -342,3 +353,69 @@ type OscUdpServer(hostname: string, port: int, methods: DispatchTable list) =
 
     interface IDisposable with
         member this.Dispose () = this.Dispose ()
+
+type OscTcpServer(host: IPAddress, port: int, methods: DispatchTable list) =
+    let cts = new CancellationTokenSource()
+    let mutable running = false
+
+    new(host: string, port, methods) = new OscTcpServer(IPAddress.Parse host, port, methods)
+
+    member val Methods = methods with get, set
+
+    member private this.ReadAndProcessMessage (tcpClient: TcpClient) = async {
+        use tmpStream = new MemoryStream()
+        let! msg = parseOscMessageAsync tmpStream
+        let netStream = tcpClient.GetStream ()
+        let tmpStreamBuffer = tmpStream.GetBuffer ()
+        // first, write a big-endian int32 indicating the size of the OSC packet
+        do! writeOscInt32Async netStream tmpStreamBuffer.Length
+        // then, write the packet itself
+        do! Async.AwaitTask (tmpStream.CopyToAsync netStream)
+        match! Async.Catch (dispatchMessage this.Methods msg) with
+        | Choice1Of2 () -> ()
+        | Choice2Of2 e -> eprintfn "Message dispatch failed: %O" e
+    }
+
+    member private this.MessageLoop (tcpClient: TcpClient) = async {
+        while tcpClient.Connected do
+            match! Async.Catch (this.ReadAndProcessMessage tcpClient) with
+            | Choice1Of2 result -> return result
+            | Choice2Of2 e -> eprintfn "Error processing packet: %s" (string e)
+    }
+
+    member private this.HandleConnections (tcpListener: TcpListener) = async {
+        while true do
+            try
+                let! connection = Async.AwaitTask (tcpListener.AcceptTcpClientAsync ())
+                Async.Start (this.MessageLoop (connection))
+            with e -> eprintfn "Error handling connection: %O" e
+    }
+
+    member private this.Start () = async {
+        if running then raise (IOException("Server already listening"))
+        let tcpListener = new TcpListener(host, port)
+        tcpListener.Start ()
+        printfn "Listening at %O:%d" host port
+        do! this.HandleConnections tcpListener
+    }
+
+    member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
+    member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
+
+    interface IOscServer with
+        override this.Run () = this.Run ()
+        override this.RunInThreadPool () = this.RunInThreadPool ()
+
+    member _.Dispose () =
+        try
+            cts.Cancel ()
+        finally
+            cts.Dispose ()
+
+    interface IDisposable with
+        member this.Dispose () = this.Dispose ()
+
+[<AutoOpen>]
+module Extensions =
+    type IOscClient with
+        member this.SendMessage msg = Async.RunSynchronously (this.SendMessageAsync msg)
