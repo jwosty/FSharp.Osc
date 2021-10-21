@@ -26,7 +26,7 @@ module Expect =
             if actual <> expected then
                 fail ()
 
-type MockUdpClient(endPoint, channel: Channel<UdpReceiveResult>) =
+type ChannelUdpClient(endPoint, channel: Channel<UdpReceiveResult>) =
     interface IUdpClient with
         override this.Connect (host, port) = ()
         override this.Connect endPoint = ()
@@ -46,7 +46,39 @@ type MockUdpClient(endPoint, channel: Channel<UdpReceiveResult>) =
     interface IDisposable with
         override this.Dispose () = ()
 
-let internal mockUdpClient channel endPoint = new MockUdpClient(endPoint, channel) :> IUdpClient
+let internal channelUdpClient channel endPoint = new ChannelUdpClient(endPoint, channel) :> IUdpClient
+
+let internal mockUdpClient receiveAsync sendAsync =
+    let mutable endPoint = Unchecked.defaultof<IPEndPoint>
+    { 
+        new IUdpClient with
+            override this.Connect (_,_) = ()
+            override this.Connect _ = ()
+            override this.ReceiveAsync () = (defaultArg receiveAsync (fun _ -> raise (NotImplementedException()))) endPoint
+            override this.SendAsync (x,y) = (defaultArg sendAsync (fun (_,_) -> raise (NotImplementedException()))) (x,y)
+            override this.Dispose () = ()
+    },
+    (fun e -> endPoint <- e)
+
+// A wrapper around ManualResetEvent that allows us to "return" a result from it, asynchronously
+type AsyncWaitHandle<'t>(?millisecondsTimeout, ?ct: CancellationToken) =
+    let signal = new ManualResetEventSlim()
+    let mutable result = None
+    let mutable disposed = false
+
+    member _.Continue (value: 't) =
+        result <- Some value
+        signal.Set()
+
+    member _.ResultAsync () = async {
+        let! ct = Async.CancellationToken
+        match! Async.AwaitWaitHandle (signal.WaitHandle, ?millisecondsTimeout = millisecondsTimeout) with
+        | true -> return result.Value
+        | false -> return raise (new TimeoutException())
+    }
+
+    interface IDisposable with
+        override _.Dispose () = if not disposed then signal.Dispose ()
 
 let ascii (c: char) = byte c
 
@@ -633,25 +665,50 @@ let tests =
                 Expect.isTrue "/foo(bar) method called" foobarCalled
             })
         ]
+        testList (nameof(OscUdpServer)) [
+            testCaseAsyncTimeout 1_000 "One message" (async {
+                let messageActual = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
+                use msgReceived = new AsyncWaitHandle<_>()
+
+                let! msgBytes = async {
+                    use memStream = new MemoryStream()
+                    do! writeOscMessageAsync memStream messageActual
+                    return memStream.ToArray()
+                }
+
+                let udpClient, setEndPoint =
+                    mockUdpClient
+                        (Some (fun endPoint ->
+                            Task.FromResult (UdpReceiveResult(msgBytes, endPoint))))
+                        (Some (fun (data, bytes) -> raise (NotImplementedException())))
+                let server =
+                    new OscUdpServer(
+                        "127.0.0.1", 1234,
+                        (fun e -> setEndPoint e; udpClient),
+                        (fun m -> async { msgReceived.Continue m }))
+
+                use _ = server.Run ()
+
+                let! msg = msgReceived.ResultAsync ()
+                msg |> Expect.equal (nameof(msg)) messageActual
+            })
+        ]
+        // these are more of integration tests
         testList ("OscUdpServer can read from OscUdpClient") [
-            testCaseAsync "One message" (async {
-                use messageReceived = new ManualResetEventSlim()
-                let mutable e = None
+            testCaseAsyncTimeout 100 "One message" (async {
+                use msg1Awaiter = new AsyncWaitHandle<_>()
                 let c = Channel.CreateBounded 1
 
                 let message = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
-                let server = new OscUdpServer("127.0.0.1", 1234, mockUdpClient c, (fun msg -> async {
-                    try Expect.equal "message" message msg with ex -> e <- Some ex
-                    messageReceived.Set ()
-                }))
+                let server = new OscUdpServer("127.0.0.1", 1234, channelUdpClient c, (fun msg -> async { msg1Awaiter.Continue msg }))
                 use _ = server.Run ()
                 
-                let client = new OscUdpClient("127.0.0.1", 1234, mockUdpClient c)
+                use client = new OscUdpClient("127.0.0.1", 1234, channelUdpClient c)
                 
                 do! client.SendMessageAsync message
 
-                let! result = Async.AwaitWaitHandle messageReceived.WaitHandle
-                e |> Option.iter (fun e -> ExceptionDispatchInfo.Capture(e).Throw())
+                let! msg = msg1Awaiter.ResultAsync ()
+                msg |> Expect.equal "message" message
             })
         ]
     ]

@@ -330,13 +330,14 @@ type OscUdpClient internal(udpClient: IUdpClient) =
     interface IDisposable with
         override this.Dispose () = ()
 
-type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint -> IUdpClient, dispatch: OscMessage -> Async<unit>) =
+type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint -> IUdpClient, dispatch: OscMessage -> Async<unit>, ?onError: Exception -> unit) =
     let cts = new CancellationTokenSource()
     let mutable running = false
+    let mutable disposed = false
 
-    internal new(host: string, port, makeUdpClient, dispatch) = new OscUdpServer(IPAddress.Parse host, port, makeUdpClient, dispatch)
+    let onError = defaultArg onError ignore
 
-    //member val Methods = methods with get, set
+    internal new(host: string, port, makeUdpClient, dispatch, ?onError) = new OscUdpServer(IPAddress.Parse host, port, makeUdpClient, dispatch, ?onError = onError)
 
     member private this.ReadAndProcessMessage (udpClient: IUdpClient) = async {
         let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
@@ -345,7 +346,13 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
         
         dispatch msg
         |> Async.Catch
-        |> Async.map (fun result -> match result with | Choice1Of2 () -> () | Choice2Of2 e -> eprintfn "Message dispatch failed: %O" e)
+        |> Async.map (fun result ->
+            match result with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 e ->
+                eprintfn "Message dispatch failed: %O" e
+                try onError e with e' -> eprintfn "Error inside error handler %O" e'
+        )
         |> Async.Start
     }
 
@@ -353,7 +360,9 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
         while true do
             match! Async.Catch (this.ReadAndProcessMessage udpClient) with
             | Choice1Of2 result -> return result
-            | Choice2Of2 e -> eprintfn "Error processing packet: %s" (string e)
+            | Choice2Of2 e ->
+                eprintfn "Error processing packet: %s" (string e)
+                try onError e with e' -> eprintfn "Error inside error handler %O" e'
     }
 
     /// Asynchronous starts listening and processing packets, calling back when the server is shut down.
@@ -380,10 +389,12 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
         override this.RunAsync () = this.RunAsync ()
 
     member _.Dispose () =
-        try
-            cts.Cancel ()
-        finally
-            cts.Dispose ()
+        if not disposed then
+            try
+                cts.Cancel ()
+            finally
+                cts.Dispose ()
+            disposed <- true
 
     interface IDisposable with
         member this.Dispose () = this.Dispose ()
