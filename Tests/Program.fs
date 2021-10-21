@@ -60,19 +60,25 @@ let internal mockUdpClient receiveAsync sendAsync =
     },
     (fun e -> endPoint <- e)
 
+let writeOscMessageToArrayAsync msg = async {
+    use memStream = new MemoryStream()
+    do! writeOscMessageAsync memStream msg
+    return memStream.ToArray()
+}
+
 // A wrapper around ManualResetEvent that allows us to "return" a result from it, asynchronously
 type AsyncWaitHandle<'t>(?millisecondsTimeout, ?ct: CancellationToken) =
-    let signal = new ManualResetEventSlim()
+    let signal = new AutoResetEvent(false)
     let mutable result = None
     let mutable disposed = false
 
     member _.Continue (value: 't) =
         result <- Some value
-        signal.Set()
+        signal.Set() |> ignore
 
     member _.ResultAsync () = async {
         let! ct = Async.CancellationToken
-        match! Async.AwaitWaitHandle (signal.WaitHandle, ?millisecondsTimeout = millisecondsTimeout) with
+        match! Async.AwaitWaitHandle (signal, ?millisecondsTimeout = millisecondsTimeout) with
         | true -> return result.Value
         | false -> return raise (new TimeoutException())
     }
@@ -666,7 +672,7 @@ let tests =
             })
         ]
         testList (nameof(OscUdpServer)) [
-            testCaseAsyncTimeout 1_000 "One message" (async {
+            testCaseAsyncTimeout defaultTimeout "One message" (async {
                 let messageActual = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
                 use msgReceived = new AsyncWaitHandle<_>()
 
@@ -692,10 +698,49 @@ let tests =
                 let! msg = msgReceived.ResultAsync ()
                 msg |> Expect.equal (nameof(msg)) messageActual
             })
+            testCaseAsync "Three messages" (async {
+                let message1Actual = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
+                let message2Actual = { addressPattern = "/bar/*"; arguments = [] }
+                let message3Actual = { addressPattern = "/{foo,bar}"; arguments = [OscInt32 42] }
+                let msgChannel = Channel.CreateUnbounded()
+
+                let! msgBytes = [message1Actual; message2Actual; message3Actual] |> Seq.map writeOscMessageToArrayAsync |> Async.Sequential
+                let msgBytesEnumerator = (msgBytes :> _ seq).GetEnumerator()
+
+                let xs = ConcurrentStack<_>()
+
+                let udpClient, setEndPoint =
+                    mockUdpClient
+                        (Some (fun endPoint ->
+                            task {
+                                msgBytesEnumerator.MoveNext () |> ignore
+                                let x = msgBytesEnumerator.Current
+                                xs.Push x
+                                return UdpReceiveResult(x, endPoint)
+                            }
+                        ))
+                        (Some (fun (data, bytes) -> raise (NotImplementedException())))
+                let server =
+                    new OscUdpServer(
+                        "127.0.0.1", 1234,
+                        (fun e -> setEndPoint e; udpClient),
+                        (fun m -> Async.AwaitTask ((msgChannel.Writer.WriteAsync m).AsTask())))
+
+                use _ = server.Run ()
+
+                let read () = Async.AwaitTask (msgChannel.Reader.ReadAsync().AsTask())
+                let! msg1 = read ()
+                let! msg2 = read ()
+                let! msg3 = read ()
+
+                msg1 |> Expect.equal (nameof(msg1)) message1Actual
+                msg2 |> Expect.equal (nameof(msg2)) message2Actual
+                msg3 |> Expect.equal (nameof(msg3)) message3Actual
+            })
         ]
         // these are more of integration tests
         testList ("OscUdpServer can read from OscUdpClient") [
-            testCaseAsyncTimeout 100 "One message" (async {
+            testCaseAsyncTimeout defaultTimeout "One message" (async {
                 use msg1Awaiter = new AsyncWaitHandle<_>()
                 let c = Channel.CreateBounded 1
 
