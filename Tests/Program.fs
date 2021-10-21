@@ -2,9 +2,15 @@
 open System
 open System.Collections.Concurrent
 open System.IO
+open System.Threading
+open System.Threading.Channels
+open System.Threading.Tasks
+open System.Net.Sockets
 open Expecto
 open Expecto.Flip
 open Osc.fs
+open System.Net
+open System.Runtime.ExceptionServices
 
 module Expect =
     // from https://github.com/haf/expecto/blob/6b63ec66af2572232738f016ca4e4d62c4e30403/Expecto/Expecto.fs#L58
@@ -19,6 +25,28 @@ module Expect =
         else
             if actual <> expected then
                 fail ()
+
+type MockUdpClient(endPoint, channel: Channel<UdpReceiveResult>) =
+    interface IUdpClient with
+        override this.Connect (host, port) = ()
+        override this.Connect endPoint = ()
+        override this.ReceiveAsync () = task {
+            let! result = channel.Reader.ReadAsync().AsTask()
+            printfn "Received packet: %O" result
+            return result
+        }
+        override this.SendAsync (datagram, bytes) = task {
+            let result = UdpReceiveResult(datagram, endPoint)
+            printfn "Sending packet"
+            do! channel.Writer.WriteAsync result
+            printfn "Sent packet"
+            return bytes
+        }
+
+    interface IDisposable with
+        override this.Dispose () = ()
+
+let internal mockUdpClient channel endPoint = new MockUdpClient(endPoint, channel) :> IUdpClient
 
 let ascii (c: char) = byte c
 
@@ -50,6 +78,11 @@ let makeParseAndWriteTests eq fParse fWrite name data bytes =
         makeParseTest eq fParse data bytes
         makeWriteTest eq fWrite data bytes
     ]
+
+let inline testCaseAsyncTimeout timeout name test =
+    TestLabel(name, TestCase (Test.timeout timeout (Async test), Normal), Normal)
+
+let defaultTimeout = 100
 
 [<Tests>]
 let tests =
@@ -598,6 +631,27 @@ let tests =
                 ]
                 do! dispatchMessage table msg
                 Expect.isTrue "/foo(bar) method called" foobarCalled
+            })
+        ]
+        testList ("OscUdpServer can read from OscUdpClient") [
+            testCaseAsync "One message" (async {
+                use messageReceived = new ManualResetEventSlim()
+                let mutable e = None
+                let c = Channel.CreateBounded 1
+
+                let message = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
+                let server = new OscUdpServer("127.0.0.1", 1234, mockUdpClient c, (fun msg -> async {
+                    try Expect.equal "message" message msg with ex -> e <- Some ex
+                    messageReceived.Set ()
+                }))
+                use _ = server.Run ()
+                
+                let client = new OscUdpClient("127.0.0.1", 1234, mockUdpClient c)
+                
+                do! client.SendMessageAsync message
+
+                let! result = Async.AwaitWaitHandle messageReceived.WaitHandle
+                e |> Option.iter (fun e -> ExceptionDispatchInfo.Capture(e).Throw())
             })
         ]
     ]

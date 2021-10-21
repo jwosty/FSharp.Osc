@@ -264,6 +264,26 @@ let dispatchMessage table (msg: OscMessage) = async {
 
 open System.Net
 open System.Net.Sockets
+open System.Threading.Tasks
+
+type internal IUdpClient =
+    inherit IDisposable
+    abstract member Connect: hostname:string * port:int -> unit
+    abstract member Connect: endPoint:IPEndPoint -> unit
+    abstract member ReceiveAsync: unit -> Task<UdpReceiveResult>
+    abstract member SendAsync: datagram:byte[] * bytes:int -> Task<int>
+
+type internal UdpClientImpl(client: UdpClient) =
+    new() = new UdpClientImpl(new UdpClient())
+
+    interface IUdpClient with
+        override _.Connect (endPoint: IPEndPoint) = client.Connect endPoint
+        override _.Connect (hostname: string, port: int) = client.Connect (hostname, port)
+        override _.ReceiveAsync () = client.ReceiveAsync ()
+        override _.SendAsync (datagram, bytes) = client.SendAsync (datagram, bytes)
+    
+    interface IDisposable with
+        override _.Dispose () = client.Dispose ()
 
 type IOscClient =
     inherit IDisposable
@@ -271,8 +291,7 @@ type IOscClient =
 
 type IOscServer =
     inherit IDisposable
-    abstract member Run : unit -> unit
-    abstract member RunInThreadPool : unit -> unit
+    abstract member RunAsync : unit -> Async<unit>
 
 let private resetMemoryStream (stream: MemoryStream) =
     let buffer = stream.GetBuffer ()
@@ -280,19 +299,23 @@ let private resetMemoryStream (stream: MemoryStream) =
     stream.Position <- 0L
     stream.SetLength 0L
 
-type OscUdpClient(localEP: IPEndPoint) =
-    let udpClient = new UdpClient(localEP)
+type OscUdpClient internal(udpClient: IUdpClient) =
     let tempStream = new MemoryStream()
 
+    new(localEP: IPEndPoint) = new OscUdpClient(new UdpClientImpl(new UdpClient(localEP)))
     new(host: IPAddress, port: int) = new OscUdpClient(IPEndPoint(host, port))
     new(host: string, port: int) = new OscUdpClient(IPAddress.Parse host, port)
+
+    internal new(host: string, port: int, makeUdpClient: IPEndPoint -> IUdpClient) =
+        new OscUdpClient(makeUdpClient (IPEndPoint(IPAddress.Parse host, port)))
 
     member this.SendMessageAsync (msg: OscMessage) = async {
         resetMemoryStream tempStream
 
         do! writeOscMessageAsync tempStream msg
-        do! Async.AwaitTask (tempStream.FlushAsync ())
+        
         let buffer = tempStream.GetBuffer ()
+        do! Async.AwaitTask (tempStream.FlushAsync ())
         let! _ = Async.AwaitTask (udpClient.SendAsync (buffer, int tempStream.Length))
         return ()
     }
@@ -307,46 +330,54 @@ type OscUdpClient(localEP: IPEndPoint) =
     interface IDisposable with
         override this.Dispose () = ()
 
-type OscUdpServer(host: IPAddress, port: int, methods: DispatchTable list) =
+type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint -> IUdpClient, dispatch: OscMessage -> Async<unit>) =
     let cts = new CancellationTokenSource()
     let mutable running = false
 
-    new(host: string, port, methods) = new OscUdpServer(IPAddress.Parse host, port, methods)
+    internal new(host: string, port, makeUdpClient, dispatch) = new OscUdpServer(IPAddress.Parse host, port, makeUdpClient, dispatch)
 
-    member val Methods = methods with get, set
+    //member val Methods = methods with get, set
 
-    member private this.ReadAndProcessMessage (udpClient: UdpClient) = async {
+    member private this.ReadAndProcessMessage (udpClient: IUdpClient) = async {
         let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
         let stream = new MemoryStream(data.Buffer)
         let! msg = parseOscMessageAsync stream
         
-        dispatchMessage this.Methods msg
+        dispatch msg
         |> Async.Catch
         |> Async.map (fun result -> match result with | Choice1Of2 () -> () | Choice2Of2 e -> eprintfn "Message dispatch failed: %O" e)
         |> Async.Start
     }
 
-    member private this.MessageLoop (udpClient: UdpClient) = async {
+    member private this.MessageLoop (udpClient: IUdpClient) = async {
         while true do
             match! Async.Catch (this.ReadAndProcessMessage udpClient) with
             | Choice1Of2 result -> return result
             | Choice2Of2 e -> eprintfn "Error processing packet: %s" (string e)
     }
 
-    member private this.Start () = async {
+    /// Asynchronous starts listening and processing packets, calling back when the server is shut down.
+    member private this.RunAsync () = async {
         if running then raise (IOException("Server already listening"))
-        use udpClient = new UdpClient()
-        udpClient.Client.Bind (IPEndPoint (host, port))
-        printfn "Listening for packets on %O:%d" host port
+        let endPoint = IPEndPoint (host, port)
+        use udpClient = makeUdpClient endPoint
+        //udpClient.Connect (IPEndPoint (host, port))
         do! this.MessageLoop udpClient
     }
 
-    member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
-    member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
+    /// Starts listening for and processing packets on the current thread.
+    member this.RunSynchronously () = Async.RunSynchronously (this.RunAsync (), cancellationToken = cts.Token)
+
+    /// Starts listening for and processing packets in the thread pool, returning an IDisposable that, when disposed, stops and cleans up the listener.
+    member this.Run () =
+        Async.Start (this.RunAsync (), cancellationToken = cts.Token)
+        this :> IDisposable
+
+    //member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
+    //member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
 
     interface IOscServer with
-        override this.Run () = this.Run ()
-        override this.RunInThreadPool () = this.RunInThreadPool ()
+        override this.RunAsync () = this.RunAsync ()
 
     member _.Dispose () =
         try
