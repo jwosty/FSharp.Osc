@@ -60,6 +60,15 @@ let internal mockUdpClient receiveAsync sendAsync =
     },
     (fun e -> endPoint <- e)
 
+let internal mockTcpClient stream =
+    {
+        new ITcpClient with
+            override _.ConnectAsync (host: IPAddress, port: int) = task { () } :> Task
+            override _.ConnectAsync (host: string, port: int) = task { () } :> Task
+            override _.GetStream () = stream
+            override _.Dispose () = ()
+    }
+
 let writeOscMessageToArrayAsync msg = async {
     use memStream = new MemoryStream()
     do! writeOscMessageAsync memStream msg
@@ -124,7 +133,7 @@ let defaultTimeout = 100
 
 [<Tests>]
 let tests =
-    testList "Osc.fs" [
+    testList "Osc_fs" [
         testList (nameof(parseOscInt32Async)) (
             [   0,              [| 0x00uy; 0x00uy; 0x00uy; 0x00uy |]
                 10,             [| 0x00uy; 0x00uy; 0x00uy; 0x0Auy |]
@@ -687,8 +696,6 @@ let tests =
 
                 let! (data, count) = Async.AwaitTask (bytesWritten.Reader.ReadAsync().AsTask())
                 data |> Expect.sequenceEqual (nameof(data)) msgBytes
-                
-                ()
             })
             testCaseAsyncTimeout defaultTimeout "Three messages" (async {
                 let message1Actual = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
@@ -784,6 +791,62 @@ let tests =
                 msg1 |> Expect.equal (nameof(msg1)) message1Actual
                 msg2 |> Expect.equal (nameof(msg2)) message2Actual
                 msg3 |> Expect.equal (nameof(msg3)) message3Actual
+            })
+        ]
+        testList (nameof(OscTcpClient)) [
+            testCaseAsyncTimeout defaultTimeout "One message with Osc 1_0 style size framing" (async {
+                let messageExpected = { addressPattern = "/blah"; arguments = [OscString "foo"; OscFloat32 10.11f] }
+                let! msgBytesExpected = writeOscMessageToArrayAsync messageExpected
+                
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream)
+                
+                do! client.SendMessageAsync messageExpected
+
+                tcpStream.Position <- 0L
+                let! lb = tcpStream.AsyncRead 4
+                // the client is supposed to first write a big-endian int32 indicating the length of the OSC packet
+                let lenActual = ((int lb.[0] <<< 16) + (int lb.[1] <<< 16) + (int lb.[2] <<< 8) + int lb.[3])
+                lenActual |> Expect.equal "Frame size" msgBytesExpected.Length
+                let! bytesActual = tcpStream.AsyncRead msgBytesExpected.Length
+                bytesActual |> Expect.sequenceEqual (nameof(bytesActual)) msgBytesExpected
+            })
+            testCaseAsyncTimeout defaultTimeout "Three messages with OSC 1_0 style size framing" (async {
+                let message1Expected = { addressPattern = "/foo"; arguments = [OscString "foo"; OscFloat32 10.11f] }
+                let message2Expected = { addressPattern = "/x"; arguments = [] }
+                let message3Expected = { addressPattern = "/somewhat/longer/message/path/than/usual/*"; arguments = [OscString "The quick brown fox jumped over the lazy dog."; OscString "This is another string!"; OscFloat32 123.4f; OscInt32 10] }
+                let! msg1BytesExpected = writeOscMessageToArrayAsync message1Expected
+                let! msg2BytesExpected = writeOscMessageToArrayAsync message2Expected
+                let! msg3BytesExpected = writeOscMessageToArrayAsync message3Expected
+                
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream)
+                
+                do! client.SendMessageAsync message1Expected
+                do! client.SendMessageAsync message2Expected
+                do! client.SendMessageAsync message3Expected
+
+                let check name (bytesExpected: byte[]) = async {
+                    let! lb = tcpStream.AsyncRead 4
+                    // the client is supposed to first write a big-endian int32 indicating the length of the OSC packet
+                    let lenActual = ((int lb.[0] <<< 16) + (int lb.[1] <<< 16) + (int lb.[2] <<< 8) + int lb.[3])
+                    lenActual |> Expect.equal $"{name} frame size" bytesExpected.Length
+                    let! bytesActual = tcpStream.AsyncRead lenActual
+                    bytesActual |> Expect.sequenceEqual (nameof(bytesActual)) bytesExpected
+                }
+
+                tcpStream.Position <- 0L
+                do! check (nameof(msg1BytesExpected)) msg1BytesExpected
+                do! check (nameof(msg2BytesExpected)) msg2BytesExpected
+                do! check (nameof(msg3BytesExpected)) msg3BytesExpected
+
+                //tcpStream.Position <- 0L
+                //let! lb = tcpStream.AsyncRead 4
+                //// the client is supposed to first write a big-endian int32 indicating the length of the OSC packet
+                //let lenActual = ((int lb.[0] <<< 16) + (int lb.[1] <<< 16) + (int lb.[2] <<< 8) + int lb.[3])
+                //lenActual |> Expect.equal "Frame size" msg1BytesExpected.Length
+                //let! bytesActual = tcpStream.AsyncRead msg1BytesExpected.Length
+                //bytesActual |> Expect.sequenceEqual (nameof(bytesActual)) msg1BytesExpected
             })
         ]
         // these are more of integration tests

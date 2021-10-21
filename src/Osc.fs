@@ -273,9 +273,22 @@ type internal IUdpClient =
     abstract member ReceiveAsync: unit -> Task<UdpReceiveResult>
     abstract member SendAsync: datagram:byte[] * bytes:int -> Task<int>
 
-type internal UdpClientImpl(client: UdpClient) =
-    new() = new UdpClientImpl(new UdpClient())
+type internal ITcpClient =
+    inherit IDisposable
+    abstract member ConnectAsync: host:IPAddress*port:int -> Task
+    abstract member ConnectAsync: host:string*port:int -> Task
+    abstract member GetStream: unit -> Stream
 
+type internal TcpClientImpl(client: TcpClient) =
+    interface ITcpClient with
+        override _.ConnectAsync (host: IPAddress, port: int) = client.ConnectAsync (host, port)
+        override _.ConnectAsync (host: string, port: int) = client.ConnectAsync (host, port)
+        override _.GetStream () = client.GetStream () :> Stream
+    interface IDisposable with
+        override _.Dispose () = client.Dispose ()
+
+
+type internal UdpClientImpl(client: UdpClient) =
     interface IUdpClient with
         override _.Connect (endPoint: IPEndPoint) = client.Connect endPoint
         override _.Connect (hostname: string, port: int) = client.Connect (hostname, port)
@@ -299,15 +312,19 @@ let private resetMemoryStream (stream: MemoryStream) =
     stream.Position <- 0L
     stream.SetLength 0L
 
-type OscUdpClient internal(udpClient: IUdpClient) =
+type OscUdpClient internal(localEP: IPEndPoint, udpClient: IUdpClient) =
     let tempStream = new MemoryStream()
+    do
+        udpClient.Connect localEP
 
-    new(localEP: IPEndPoint) = new OscUdpClient(new UdpClientImpl(new UdpClient(localEP)))
+    new(localEP: IPEndPoint) =
+        new OscUdpClient(localEP, new UdpClientImpl(new UdpClient()))
     new(host: IPAddress, port: int) = new OscUdpClient(IPEndPoint(host, port))
     new(host: string, port: int) = new OscUdpClient(IPAddress.Parse host, port)
 
     internal new(host: string, port: int, makeUdpClient: IPEndPoint -> IUdpClient) =
-        new OscUdpClient(makeUdpClient (IPEndPoint(IPAddress.Parse host, port)))
+        let localEP = IPEndPoint(IPAddress.Parse host, port)
+        new OscUdpClient(localEP, makeUdpClient localEP)
 
     member this.SendMessageAsync (msg: OscMessage) = async {
         resetMemoryStream tempStream
@@ -398,6 +415,49 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
 
     interface IDisposable with
         member this.Dispose () = this.Dispose ()
+
+type OscTcpClient internal(tcpClient: ITcpClient, ?onError: Exception -> unit) =
+    let cts = new CancellationTokenSource()
+    let mutable disposed = false
+
+    new(tcpClient: TcpClient, ?onError: Exception -> unit) = new OscTcpClient(new TcpClientImpl(tcpClient), ?onError = onError)
+
+    member this.ConnectAsync (host: IPAddress, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
+    member this.ConnectAsync (host: string, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
+
+    static member ConnectAsync (host: IPAddress, port: int, ?onError) = async {
+        let tcpClient = new TcpClientImpl(new TcpClient()) :> ITcpClient
+        do! Async.AwaitTask (tcpClient.ConnectAsync (host, port))
+        return new OscTcpClient(tcpClient, ?onError = onError)
+    }
+
+    static member ConnectAsync (host: string, port: int, ?onError) = async {
+        let tcpClient = new TcpClientImpl(new TcpClient()) :> ITcpClient
+        do! Async.AwaitTask (tcpClient.ConnectAsync (host, port))
+        return new OscTcpClient(tcpClient, ?onError = onError)
+    }
+
+    static member Connect (host: IPAddress, port: int, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?onError = onError))
+    static member Connect (host: string, port: int, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?onError = onError))
+
+    member this.SendMessageAsync (msg: OscMessage) = async {
+        use tmpStream = new MemoryStream()
+        // Size framing - write the size of the stream first
+        do! writeOscMessageAsync tmpStream msg
+        tmpStream.Position <- 0L
+        let ioStream = tcpClient.GetStream ()
+        do! writeOscInt32Async ioStream (int tmpStream.Length)
+        do! Async.AwaitTask (tmpStream.CopyToAsync ioStream)
+    }
+
+    interface IOscClient with
+        override this.SendMessageAsync msg = this.SendMessageAsync msg
+
+    interface IDisposable with
+        override this.Dispose () =
+            if not disposed then
+                cts.Dispose ()
+                tcpClient.Dispose ()
 
 //type OscTcpServer(host: IPAddress, port: int, methods: DispatchTable list) =
 //    let cts = new CancellationTokenSource()
