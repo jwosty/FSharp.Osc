@@ -671,6 +671,54 @@ let tests =
                 Expect.isTrue "/foo(bar) method called" foobarCalled
             })
         ]
+        testList (nameof(OscUdpClient)) [
+            testCaseAsyncTimeout defaultTimeout "One message" (async {
+                let messageActual = { addressPattern = "/blah"; arguments = [OscString "foo"; OscFloat32 10.11f] }
+                let! msgBytes = writeOscMessageToArrayAsync messageActual
+                let bytesWritten = Channel.CreateUnbounded()
+
+                let udpClient, setEndPoint =
+                    mockUdpClient
+                        (Some (fun endPoint -> raise (NotImplementedException())))
+                        (Some (fun (data, bytes) -> bytesWritten.Writer.WriteAsync((data,bytes)).AsTask().ContinueWith(fun _ -> bytes)))
+                use client = new OscUdpClient("127.0.0.1", 1234, (fun endPoint -> setEndPoint endPoint; udpClient))
+                
+                do! client.SendMessageAsync messageActual
+
+                let! (data, count) = Async.AwaitTask (bytesWritten.Reader.ReadAsync().AsTask())
+                data |> Expect.sequenceEqual (nameof(data)) msgBytes
+                
+                ()
+            })
+            testCaseAsyncTimeout defaultTimeout "Three messages" (async {
+                let message1Actual = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
+                let message2Actual = { addressPattern = "/bar/*"; arguments = [] }
+                let message3Actual = { addressPattern = "/{foo,bar}"; arguments = [OscInt32 42] }
+                let! msg1Bytes = writeOscMessageToArrayAsync message1Actual
+                let! msg2Bytes = writeOscMessageToArrayAsync message2Actual
+                let! msg3Bytes = writeOscMessageToArrayAsync message3Actual
+                let bytesWritten = Channel.CreateUnbounded()
+
+                let udpClient, setEndPoint =
+                    mockUdpClient
+                        (Some (fun endPoint -> raise (NotImplementedException())))
+                        (Some (fun (data, bytes) -> bytesWritten.Writer.WriteAsync((data,bytes)).AsTask().ContinueWith(fun _ -> bytes)))
+                use client = new OscUdpClient("127.0.0.1", 1234, (fun endPoint -> setEndPoint endPoint; udpClient))
+                
+                do! client.SendMessageAsync message1Actual
+                do! client.SendMessageAsync message2Actual
+                do! client.SendMessageAsync message3Actual
+
+                let! (data1, _) = Async.AwaitTask (bytesWritten.Reader.ReadAsync().AsTask())
+                data1 |> Expect.sequenceEqual (nameof(data1)) msg1Bytes
+                
+                let! (data2, _) = Async.AwaitTask (bytesWritten.Reader.ReadAsync().AsTask())
+                data2 |> Expect.sequenceEqual (nameof(data2)) msg2Bytes
+
+                let! (data3, _) = Async.AwaitTask (bytesWritten.Reader.ReadAsync().AsTask())
+                data3 |> Expect.sequenceEqual (nameof(data1)) msg3Bytes
+            })
+        ]
         testList (nameof(OscUdpServer)) [
             testCaseAsyncTimeout defaultTimeout "One message" (async {
                 let messageActual = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }

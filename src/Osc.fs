@@ -314,9 +314,9 @@ type OscUdpClient internal(udpClient: IUdpClient) =
 
         do! writeOscMessageAsync tempStream msg
         
-        let buffer = tempStream.GetBuffer ()
+        let data = tempStream.ToArray()
         do! Async.AwaitTask (tempStream.FlushAsync ())
-        let! _ = Async.AwaitTask (udpClient.SendAsync (buffer, int tempStream.Length))
+        let! _ = Async.AwaitTask (udpClient.SendAsync (data, int tempStream.Length))
         return ()
     }
 
