@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="Script.fsx" />
     <None Include="SimpleServer.fsx" />
     <None Include="SimpleClient.fsx" />
     <Compile Include="Osc.fs" />

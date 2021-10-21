@@ -794,12 +794,12 @@ let tests =
             })
         ]
         testList (nameof(OscTcpClient)) [
-            testCaseAsyncTimeout defaultTimeout "One message with Osc 1_0 style size framing" (async {
+            testCaseAsyncTimeout defaultTimeout "One message with OSC 1_0 style size framing" (async {
                 let messageExpected = { addressPattern = "/blah"; arguments = [OscString "foo"; OscFloat32 10.11f] }
                 let! msgBytesExpected = writeOscMessageToArrayAsync messageExpected
                 
                 use tcpStream = new MemoryStream()
-                use client = new OscTcpClient(mockTcpClient tcpStream)
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_0)
                 
                 do! client.SendMessageAsync messageExpected
 
@@ -820,7 +820,7 @@ let tests =
                 let! msg3BytesExpected = writeOscMessageToArrayAsync message3Expected
                 
                 use tcpStream = new MemoryStream()
-                use client = new OscTcpClient(mockTcpClient tcpStream)
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_0)
                 
                 do! client.SendMessageAsync message1Expected
                 do! client.SendMessageAsync message2Expected
@@ -839,14 +839,49 @@ let tests =
                 do! check (nameof(msg1BytesExpected)) msg1BytesExpected
                 do! check (nameof(msg2BytesExpected)) msg2BytesExpected
                 do! check (nameof(msg3BytesExpected)) msg3BytesExpected
+            })
+            testCaseAsyncTimeout defaultTimeout "One message with OSC 1_1 style SLIP framing" (async {
+                let messageExpected = { addressPattern = "/blah"; arguments = [OscString "foo"; OscFloat32 10.11f] }
+                let! msgBytesExpected = writeOscMessageToArrayAsync messageExpected
+                
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
+                
+                do! client.SendMessageAsync messageExpected
 
-                //tcpStream.Position <- 0L
-                //let! lb = tcpStream.AsyncRead 4
-                //// the client is supposed to first write a big-endian int32 indicating the length of the OSC packet
-                //let lenActual = ((int lb.[0] <<< 16) + (int lb.[1] <<< 16) + (int lb.[2] <<< 8) + int lb.[3])
-                //lenActual |> Expect.equal "Frame size" msg1BytesExpected.Length
-                //let! bytesActual = tcpStream.AsyncRead msg1BytesExpected.Length
-                //bytesActual |> Expect.sequenceEqual (nameof(bytesActual)) msg1BytesExpected
+                tcpStream.Position <- 0L
+                let! bytesActual = tcpStream.AsyncRead (msgBytesExpected.Length + 2)
+                bytesActual.[0] |> Expect.equal "Should begin with END byte" 0xC0uy
+                bytesActual.[1 .. (bytesActual.Length - 2)] |> Expect.sequenceEqual (nameof(bytesActual)) msgBytesExpected
+                bytesActual.[bytesActual.Length - 1] |> Expect.equal "Should end with END byte" 0xC0uy
+            })
+            testCaseAsyncTimeout defaultTimeout "Three messages with OSC 1_1 style SLIP framing" (async {
+                let message1Expected = { addressPattern = "/x"; arguments = [] }
+                let message2Expected = { addressPattern = "/blah"; arguments = [OscString "foo"; OscFloat32 10.11f] }
+                let message3Expected = { addressPattern = "/blah"; arguments = [OscString "Open Sound Control (OSC) is an open, transport-independent, message-based protocol developed for communication among computers, sound synthesizers, and other multimedia devices."; OscFloat32 -1111111.125f] }
+                let! msg1BytesExpected = writeOscMessageToArrayAsync message1Expected
+                let! msg2BytesExpected = writeOscMessageToArrayAsync message2Expected
+                let! msg3BytesExpected = writeOscMessageToArrayAsync message3Expected
+                
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
+                
+                do! client.SendMessageAsync message1Expected
+                do! client.SendMessageAsync message2Expected
+                do! client.SendMessageAsync message3Expected
+
+                tcpStream.Position <- 0L
+
+                let check name (msgBytesExpected: byte[]) = async {
+                    let! bytesActual = tcpStream.AsyncRead (msgBytesExpected.Length + 2)
+                    bytesActual.[0] |> Expect.equal "Should begin with END byte" 0xC0uy
+                    bytesActual.[1 .. (bytesActual.Length - 2)] |> Expect.sequenceEqual name msgBytesExpected
+                    bytesActual.[bytesActual.Length - 1] |> Expect.equal "Should end with END byte" 0xC0uy
+                }
+
+                do! check (nameof(msg1BytesExpected)) msg1BytesExpected
+                do! check (nameof(msg2BytesExpected)) msg2BytesExpected
+                do! check (nameof(msg3BytesExpected)) msg3BytesExpected
             })
         ]
         // these are more of integration tests

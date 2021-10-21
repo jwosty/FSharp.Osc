@@ -266,6 +266,12 @@ open System.Net
 open System.Net.Sockets
 open System.Threading.Tasks
 
+type FrameScheme =
+    /// OSC 1.0 - Size framing
+    | Osc1_0
+    /// OSC 1.1 - SLIP framing
+    | Osc1_1
+
 type internal IUdpClient =
     inherit IDisposable
     abstract member Connect: hostname:string * port:int -> unit
@@ -416,38 +422,52 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
     interface IDisposable with
         member this.Dispose () = this.Dispose ()
 
-type OscTcpClient internal(tcpClient: ITcpClient, ?onError: Exception -> unit) =
+type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Exception -> unit) =
     let cts = new CancellationTokenSource()
     let mutable disposed = false
 
-    new(tcpClient: TcpClient, ?onError: Exception -> unit) = new OscTcpClient(new TcpClientImpl(tcpClient), ?onError = onError)
+    let END = 0xC0uy
+    let ESC = 0xDBuy
+    let ESC_END = 0xDCuy
+    let ESC_ESC = 0xDDuy
+
+    let frameScheme = defaultArg frameScheme Osc1_0
+
+    new(tcpClient: TcpClient, frameScheme, ?onError: Exception -> unit) = new OscTcpClient(new TcpClientImpl(tcpClient), frameScheme, ?onError = onError)
 
     member this.ConnectAsync (host: IPAddress, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
     member this.ConnectAsync (host: string, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
 
-    static member ConnectAsync (host: IPAddress, port: int, ?onError) = async {
+    static member ConnectAsync (host: IPAddress, port: int, ?frameScheme, ?onError) = async {
         let tcpClient = new TcpClientImpl(new TcpClient()) :> ITcpClient
         do! Async.AwaitTask (tcpClient.ConnectAsync (host, port))
-        return new OscTcpClient(tcpClient, ?onError = onError)
+        return new OscTcpClient(tcpClient, ?frameScheme = frameScheme, ?onError = onError)
     }
 
-    static member ConnectAsync (host: string, port: int, ?onError) = async {
+    static member ConnectAsync (host: string, port: int, ?frameScheme, ?onError) = async {
         let tcpClient = new TcpClientImpl(new TcpClient()) :> ITcpClient
         do! Async.AwaitTask (tcpClient.ConnectAsync (host, port))
-        return new OscTcpClient(tcpClient, ?onError = onError)
+        return new OscTcpClient(tcpClient, ?frameScheme = frameScheme, ?onError = onError)
     }
 
-    static member Connect (host: IPAddress, port: int, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?onError = onError))
-    static member Connect (host: string, port: int, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?onError = onError))
+    static member Connect (host: IPAddress, port: int, ?frameScheme, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?frameScheme = frameScheme, ?onError = onError))
+    static member Connect (host: string, port: int, ?frameScheme, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?frameScheme = frameScheme, ?onError = onError))
 
     member this.SendMessageAsync (msg: OscMessage) = async {
-        use tmpStream = new MemoryStream()
-        // Size framing - write the size of the stream first
-        do! writeOscMessageAsync tmpStream msg
-        tmpStream.Position <- 0L
         let ioStream = tcpClient.GetStream ()
-        do! writeOscInt32Async ioStream (int tmpStream.Length)
-        do! Async.AwaitTask (tmpStream.CopyToAsync ioStream)
+        match frameScheme with
+        | Osc1_0 ->
+            use tmpStream = new MemoryStream()
+            // Size framing - write the size of the stream first
+            do! writeOscMessageAsync tmpStream msg
+            tmpStream.Position <- 0L
+            do! writeOscInt32Async ioStream (int tmpStream.Length)
+            do! Async.AwaitTask (tmpStream.CopyToAsync ioStream)
+        | Osc1_1 ->
+            // SLIP encoding with double-end bytes
+            ioStream.WriteByte END
+            do! writeOscMessageAsync ioStream msg
+            ioStream.WriteByte END
     }
 
     interface IOscClient with
