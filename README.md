@@ -1,4 +1,4 @@
-An implementation of most of [OSC 1.0](http://opensoundcontrol.org/spec-1_0.html) in F#.
+An [OSC 1.1](http://opensoundcontrol.org/files/2009-NIME-OSC-1.1.pdf) library for F#.
 
 A server:
 
@@ -35,3 +35,16 @@ for _ in 0..9 do
     client.SendMessage msg |> ignore
     System.Threading.Thread.Sleep 1_000
 ```
+
+Currently, the following is supported:
+
+* Strings, 32 bit ints, 32 bit floats, booleans, None, and Impulse data types
+* UDP - client and server
+* TCP - client and server
+    * Choose between OSC 1.0 and OSC 1.1 frame encodings
+
+The following is not yet implemented ([PRs are welcome!](https://github.com/jwosty/Osc.fs/pulls)):
+
+* Timetag data types
+* Bundles
+* TCP server SLIP encoding (aka OSC 1.1 frame encoding)
