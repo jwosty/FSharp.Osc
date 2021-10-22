@@ -75,6 +75,11 @@ let writeOscMessageToArrayAsync msg = async {
     return memStream.ToArray()
 }
 
+let END = 0xC0uy
+let ESC = 0xDBuy
+let ESC_END = 0xDCuy
+let ESC_ESC = 0xDDuy
+
 // A wrapper around ManualResetEvent that allows us to "return" a result from it, asynchronously
 type AsyncWaitHandle<'t>(?millisecondsTimeout, ?ct: CancellationToken) =
     let signal = new AutoResetEvent(false)
@@ -882,6 +887,101 @@ let tests =
                 do! check (nameof(msg1BytesExpected)) msg1BytesExpected
                 do! check (nameof(msg2BytesExpected)) msg2BytesExpected
                 do! check (nameof(msg3BytesExpected)) msg3BytesExpected
+            })
+            testCaseAsyncTimeout defaultTimeout "One message with OSC 1_1 style SLIP framing and an END byte in the payload" (async {
+                // 0xC0 = SLIP END bytes
+                let messageExpected = { addressPattern = "/blah"; arguments = [OscString "string1"; OscInt32 (int END); OscString "string2"] }
+                let msgBytesExpected =
+                  [|0x2Fuy; 0x62uy; 0x6Cuy; 0x61uy
+                    0x68uy; 0x00uy; 0x00uy; 0x00uy
+                    0x2Cuy; 0x73uy; 0x69uy; 0x73uy
+                    0x00uy; 0x00uy; 0x00uy; 0x00uy
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x31uy; 0x00uy
+                                         // END gets escaped to ESC_END, END
+                    0x00uy; 0x00uy; 0x00uy; ESC; ESC_END
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x32uy; 0x00uy|]
+
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
+                
+                do! client.SendMessageAsync messageExpected
+
+                tcpStream.Position <- 0L
+                let! bytesActual = tcpStream.AsyncRead (msgBytesExpected.Length + 2)
+                bytesActual.[0] |> Expect.equal "Should begin with END byte" 0xC0uy
+                bytesActual.[1 .. (bytesActual.Length - 2)] |> Expect.sequenceEqual (nameof(bytesActual)) msgBytesExpected
+                bytesActual.[bytesActual.Length - 1] |> Expect.equal "Should end with END byte" 0xC0uy
+            })
+            testCaseAsyncTimeout defaultTimeout "One message with OSC 1_1 style SLIP framing and an ESC byte in the payload" (async {
+                // 0xC0 = SLIP END bytes
+                let messageExpected = { addressPattern = "/blah"; arguments = [OscString "string1"; OscInt32 (int ESC); OscString "string2"] }
+                //writeOscMessageToArrayAsync messageExpected |> Async.RunSynchronously |> Seq.map (fun b -> $"0x%02X{b}uy") |> Seq.chunkBySize 4 |> Seq.map (String.concat "; ") |> String.concat "\n"
+                let msgBytesExpected =
+                  [|0x2Fuy; 0x62uy; 0x6Cuy; 0x61uy
+                    0x68uy; 0x00uy; 0x00uy; 0x00uy
+                    0x2Cuy; 0x73uy; 0x69uy; 0x73uy
+                    0x00uy; 0x00uy; 0x00uy; 0x00uy
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x31uy; 0x00uy
+                                         // END gets escaped to ESC_END, END_ESC
+                    0x00uy; 0x00uy; 0x00uy; ESC; ESC_ESC
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x32uy; 0x00uy|]
+
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
+                
+                do! client.SendMessageAsync messageExpected
+
+                tcpStream.Position <- 0L
+                let! bytesActual = tcpStream.AsyncRead (msgBytesExpected.Length + 2)
+                bytesActual.[0] |> Expect.equal "Should begin with END byte" 0xC0uy
+                bytesActual.[1 .. (bytesActual.Length - 2)] |> Expect.sequenceEqual (nameof(bytesActual)) msgBytesExpected
+                bytesActual.[bytesActual.Length - 1] |> Expect.equal "Should end with END byte" 0xC0uy
+            })
+            testCaseAsyncTimeout defaultTimeout "One message with OSC 1_1 style SLIP framing and various ESC and END bytes in the payload" (async {
+                let messageExpected = {
+                    addressPattern = "/blah"
+                    arguments = [
+                        OscInt32 (int ESC)
+                        OscString "string1"
+                        OscInt32 ((int ESC <<< 8) + int ESC)
+                        OscString "string2"
+                        OscInt32 0xDEADBEEF
+                        OscInt32 ((int END <<< 24) + (int END <<< 8) + int ESC)
+                    ]
+                }
+                //writeOscMessageToArrayAsync messageExpected |> Async.RunSynchronously |> Seq.map (fun b -> $"0x%02X{b}uy") |> Seq.chunkBySize 4 |> Seq.map (String.concat "; ") |> String.concat "\n"
+                let msgBytesExpected =
+                  [|0x2Fuy; 0x62uy; 0x6Cuy; 0x61uy
+                    0x68uy; 0x00uy; 0x00uy; 0x00uy
+                    0x2Cuy; 0x69uy; 0x73uy; 0x69uy
+                    0x73uy; 0x69uy; 0x69uy; 0x00uy
+                    0x00uy; 0x00uy; 0x00uy; ESC; ESC_ESC
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x31uy; 0x00uy
+                    0x00uy; 0x00uy; ESC; ESC_ESC;
+                                            ESC; ESC_ESC
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x32uy; 0x00uy
+                    0xDEuy; 0xADuy; 0xBEuy; 0xEFuy
+                    ESC; ESC_END;
+                            0x00uy; ESC; ESC_END;
+                                    ESC; ESC_ESC|]
+
+
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
+                
+                do! client.SendMessageAsync messageExpected
+
+                tcpStream.Position <- 0L
+                let! bytesActual = tcpStream.AsyncRead (msgBytesExpected.Length + 2)
+                bytesActual.[0] |> Expect.equal "Should begin with END byte" 0xC0uy
+                bytesActual.[1 .. (bytesActual.Length - 2)] |> Expect.sequenceEqual (nameof(bytesActual)) msgBytesExpected
+                bytesActual.[bytesActual.Length - 1] |> Expect.equal "Should end with END byte" 0xC0uy
             })
         ]
         // these are more of integration tests

@@ -426,10 +426,10 @@ type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Except
     let cts = new CancellationTokenSource()
     let mutable disposed = false
 
-    let END = 0xC0uy
-    let ESC = 0xDBuy
-    let ESC_END = 0xDCuy
-    let ESC_ESC = 0xDDuy
+    let [<Literal>] END = 0xC0uy
+    let [<Literal>] ESC = 0xDBuy
+    let [<Literal>] ESC_END = 0xDCuy
+    let [<Literal>] ESC_ESC = 0xDDuy
 
     let frameScheme = defaultArg frameScheme Osc1_0
 
@@ -464,9 +464,30 @@ type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Except
             do! writeOscInt32Async ioStream (int tmpStream.Length)
             do! Async.AwaitTask (tmpStream.CopyToAsync ioStream)
         | Osc1_1 ->
+            use tmpStream = new MemoryStream()
+            do! writeOscMessageAsync tmpStream msg
+            let arr = tmpStream.ToArray()
+
             // SLIP encoding with double-end bytes
             ioStream.WriteByte END
-            do! writeOscMessageAsync ioStream msg
+            // escaping the special bytes
+            let mutable startI = 0
+
+            let inline escapeSpecialBytes transposedByte i = async {
+                do! ioStream.AsyncWrite (arr, startI, i - startI)
+                ioStream.WriteByte ESC
+                ioStream.WriteByte transposedByte
+                startI <- i+1
+            }
+
+            for i in 0 .. arr.Length - 1 do
+                match arr.[i] with
+                | END -> do! escapeSpecialBytes ESC_END i
+                | ESC -> do! escapeSpecialBytes ESC_ESC i
+                | _ -> ()
+            // write loop never had to do anything
+            if startI < arr.Length then
+                do! ioStream.AsyncWrite (arr, startI, arr.Length - startI)
             ioStream.WriteByte END
     }
 
