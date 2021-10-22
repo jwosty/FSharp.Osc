@@ -285,6 +285,10 @@ type internal ITcpClient =
     abstract member ConnectAsync: host:string*port:int -> Task
     abstract member GetStream: unit -> Stream
 
+type internal ITcpListener =
+    abstract member Start: unit -> unit
+    abstract member AcceptTcpClientAsync: unit -> Task<ITcpClient>
+
 type internal TcpClientImpl(client: TcpClient) =
     interface ITcpClient with
         override _.ConnectAsync (host: IPAddress, port: int) = client.ConnectAsync (host, port)
@@ -292,7 +296,6 @@ type internal TcpClientImpl(client: TcpClient) =
         override _.GetStream () = client.GetStream () :> Stream
     interface IDisposable with
         override _.Dispose () = client.Dispose ()
-
 
 type internal UdpClientImpl(client: UdpClient) =
     interface IUdpClient with
@@ -304,13 +307,20 @@ type internal UdpClientImpl(client: UdpClient) =
     interface IDisposable with
         override _.Dispose () = client.Dispose ()
 
+type TcpListenerImpl(listener: TcpListener) =
+    interface ITcpListener with
+        override _.AcceptTcpClientAsync () = 
+            listener.AcceptTcpClientAsync().ContinueWith(fun (t: Task<TcpClient>) -> new TcpClientImpl(t.Result) :> ITcpClient)
+        override _.Start () = listener.Start ()
+
 type IOscClient =
     inherit IDisposable
     abstract member SendMessageAsync : msg:OscMessage -> Async<unit>
 
 type IOscServer =
     inherit IDisposable
-    abstract member RunAsync : unit -> Async<unit>
+    abstract member Run: unit -> IDisposable
+    abstract member RunSynchronously: unit -> unit
 
 let private resetMemoryStream (stream: MemoryStream) =
     let buffer = stream.GetBuffer ()
@@ -409,7 +419,8 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
     //member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
 
     interface IOscServer with
-        override this.RunAsync () = this.RunAsync ()
+        override this.Run () = this.Run ()
+        override this.RunSynchronously () = this.RunSynchronously ()
 
     member _.Dispose () =
         if not disposed then
@@ -422,7 +433,9 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
     interface IDisposable with
         member this.Dispose () = this.Dispose ()
 
-type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Exception -> unit) =
+// I'm actually not sure if this works right, or if TouchOSC is broken (the former is unlikely) -- I've tried to test this against TouchOSC but nothing happens.... Hmm...
+// The UDP client and server works against TouchOSC, though...
+type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme) =
     let cts = new CancellationTokenSource()
     let mutable disposed = false
 
@@ -433,7 +446,7 @@ type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Except
 
     let frameScheme = defaultArg frameScheme Osc1_0
 
-    new(tcpClient: TcpClient, frameScheme, ?onError: Exception -> unit) = new OscTcpClient(new TcpClientImpl(tcpClient), frameScheme, ?onError = onError)
+    new(tcpClient: TcpClient, ?frameScheme) = new OscTcpClient(new TcpClientImpl(tcpClient), ?frameScheme = frameScheme)
 
     member this.ConnectAsync (host: IPAddress, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
     member this.ConnectAsync (host: string, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
@@ -441,13 +454,13 @@ type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Except
     static member ConnectAsync (host: IPAddress, port: int, ?frameScheme, ?onError) = async {
         let tcpClient = new TcpClientImpl(new TcpClient()) :> ITcpClient
         do! Async.AwaitTask (tcpClient.ConnectAsync (host, port))
-        return new OscTcpClient(tcpClient, ?frameScheme = frameScheme, ?onError = onError)
+        return new OscTcpClient(tcpClient, ?frameScheme = frameScheme)
     }
 
     static member ConnectAsync (host: string, port: int, ?frameScheme, ?onError) = async {
         let tcpClient = new TcpClientImpl(new TcpClient()) :> ITcpClient
         do! Async.AwaitTask (tcpClient.ConnectAsync (host, port))
-        return new OscTcpClient(tcpClient, ?frameScheme = frameScheme, ?onError = onError)
+        return new OscTcpClient(tcpClient, ?frameScheme = frameScheme)
     }
 
     static member Connect (host: IPAddress, port: int, ?frameScheme, ?onError) = Async.RunSynchronously (OscTcpClient.ConnectAsync (host, port, ?frameScheme = frameScheme, ?onError = onError))
@@ -499,6 +512,55 @@ type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme, ?onError: Except
             if not disposed then
                 cts.Dispose ()
                 tcpClient.Dispose ()
+
+type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> Async<unit>, ?frameScheme, ?onError) =
+    let cts = new CancellationTokenSource()
+    let mutable disposed = false
+
+    let onError = defaultArg onError ignore
+    
+    let frameScheme = defaultArg frameScheme Osc1_0
+    do
+    // TODO: implement OSC 1.1 SLIP framing
+        if frameScheme = Osc1_1 then raise (NotImplementedException("OSC 1.1 frame scheme (SLIP encoding) not implemented yet"))
+
+    internal new(host: IPAddress, port: int, dispatch, ?frameScheme, ?onError) =
+        new OscTcpServer(new TcpListenerImpl(new TcpListener(host, port)), dispatch, ?frameScheme = frameScheme, ?onError = onError)
+
+    member private this.HandleClient (clientStream: Stream) = async {
+        try
+            while true do
+                let! msg = parseOscMessageAsync clientStream
+                do! dispatch msg
+        with e ->
+            eprintfn "Error handling client: %O" e
+    }
+
+    member private this.RunAsync () = async {
+        while true do
+            let! client = Async.AwaitTask (tcpListener.AcceptTcpClientAsync ())
+            Async.Start (this.HandleClient (client.GetStream ()))
+    }
+
+    member this.Run () =
+        Async.Start (this.RunAsync ())
+        this :> IDisposable
+    member this.RunSynchronously () =
+        Async.RunSynchronously (this.RunAsync ())
+
+    interface IOscServer with
+        override this.Run () = this.Run ()
+        override this.RunSynchronously () = this.RunSynchronously ()
+
+    member _.Dispose () =
+        try
+            cts.Cancel ()
+        finally
+            cts.Dispose ()
+            disposed <- true
+
+    interface IDisposable with
+        override this.Dispose () = this.Dispose ()
 
 //type OscTcpServer(host: IPAddress, port: int, methods: DispatchTable list) =
 //    let cts = new CancellationTokenSource()

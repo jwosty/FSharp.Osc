@@ -69,6 +69,19 @@ let internal mockTcpClient stream =
             override _.Dispose () = ()
     }
 
+// stream 0 = connection 0, stream 1 = connection 1, etc.
+let internal mockTcpListener (connectionStreams: Stream seq) =
+    let mutable started = false
+    let ss = connectionStreams.GetEnumerator ()
+    {
+        new ITcpListener with
+            override _.AcceptTcpClientAsync () = task {
+                ss.MoveNext() |> ignore
+                return mockTcpClient ss.Current
+            }
+            override _.Start () = started <- true 
+    }
+
 let writeOscMessageToArrayAsync msg = async {
     use memStream = new MemoryStream()
     do! writeOscMessageAsync memStream msg
@@ -954,6 +967,8 @@ let tests =
                     ]
                 }
                 //writeOscMessageToArrayAsync messageExpected |> Async.RunSynchronously |> Seq.map (fun b -> $"0x%02X{b}uy") |> Seq.chunkBySize 4 |> Seq.map (String.concat "; ") |> String.concat "\n"
+                // in hindsight, now that I've already written this, I could have just injected the writeOscMessageAsync and not had to couple these tests to
+                // the actual message parsing/writing, making them not really unit tests... Oh well. I don't feel like rewriting these tests.
                 let msgBytesExpected =
                   [|0x2Fuy; 0x62uy; 0x6Cuy; 0x61uy
                     0x68uy; 0x00uy; 0x00uy; 0x00uy
@@ -971,6 +986,48 @@ let tests =
                             0x00uy; ESC; ESC_END;
                                     ESC; ESC_ESC|]
 
+                use tcpStream = new MemoryStream()
+                use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
+                
+                do! client.SendMessageAsync messageExpected
+
+                tcpStream.Position <- 0L
+                let! bytesActual = tcpStream.AsyncRead (msgBytesExpected.Length + 2)
+                bytesActual.[0] |> Expect.equal "Should begin with END byte" 0xC0uy
+                bytesActual.[1 .. (bytesActual.Length - 2)] |> Expect.sequenceEqual (nameof(bytesActual)) msgBytesExpected
+                bytesActual.[bytesActual.Length - 1] |> Expect.equal "Should end with END byte" 0xC0uy
+            })
+        ]
+        testList (nameof(OscTcpServer)) [
+            testCaseAsyncTimeout defaultTimeout "One message with OSC 1_1 style SLIP framing and various ESC and END bytes in the payload" (async {
+                let messageExpected = {
+                    addressPattern = "/blah"
+                    arguments = [
+                        OscInt32 (int ESC)
+                        OscString "string1"
+                        OscInt32 ((int ESC <<< 8) + int ESC)
+                        OscString "string2"
+                        OscInt32 0xDEADBEEF
+                        OscInt32 ((int END <<< 24) + (int END <<< 8) + int ESC)
+                    ]
+                }
+                //writeOscMessageToArrayAsync messageExpected |> Async.RunSynchronously |> Seq.map (fun b -> $"0x%02X{b}uy") |> Seq.chunkBySize 4 |> Seq.map (String.concat "; ") |> String.concat "\n"
+                let msgBytesExpected =
+                  [|0x2Fuy; 0x62uy; 0x6Cuy; 0x61uy
+                    0x68uy; 0x00uy; 0x00uy; 0x00uy
+                    0x2Cuy; 0x69uy; 0x73uy; 0x69uy
+                    0x73uy; 0x69uy; 0x69uy; 0x00uy
+                    0x00uy; 0x00uy; 0x00uy; ESC; ESC_ESC
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x31uy; 0x00uy
+                    0x00uy; 0x00uy; ESC; ESC_ESC;
+                                            ESC; ESC_ESC
+                    0x73uy; 0x74uy; 0x72uy; 0x69uy
+                    0x6Euy; 0x67uy; 0x32uy; 0x00uy
+                    0xDEuy; 0xADuy; 0xBEuy; 0xEFuy
+                    ESC; ESC_END;
+                            0x00uy; ESC; ESC_END;
+                                    ESC; ESC_ESC|]
 
                 use tcpStream = new MemoryStream()
                 use client = new OscTcpClient(mockTcpClient tcpStream, Osc1_1)
@@ -986,20 +1043,124 @@ let tests =
         ]
         // these are more of integration tests
         testList ("OscUdpServer can read from OscUdpClient") [
-            testCaseAsyncTimeout defaultTimeout "One message" (async {
-                use msg1Awaiter = new AsyncWaitHandle<_>()
-                let c = Channel.CreateBounded 1
+            testCaseAsyncTimeout defaultTimeout "One connection with one message with OSC1_0 style size framing" (async {
+                let messageExpected = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
+                use msgReceived = new AsyncWaitHandle<_>()
+                
+                let msgAsMemStream msg =
+                    let s = new MemoryStream()
+                    Async.RunSynchronously (writeOscMessageAsync s msg)
+                    s.Position <- 0L
+                    s
+                
+                let tcpClient =
+                    mockTcpListener [
+                        // connection 0
+                        msgAsMemStream messageExpected
+                    ]
+                let server =
+                    new OscTcpServer(
+                        tcpClient,
+                        (fun m -> async { msgReceived.Continue m }))
 
-                let message = { addressPattern = "/foo"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
-                let server = new OscUdpServer("127.0.0.1", 1234, channelUdpClient c, (fun msg -> async { msg1Awaiter.Continue msg }))
                 use _ = server.Run ()
-                
-                use client = new OscUdpClient("127.0.0.1", 1234, channelUdpClient c)
-                
-                do! client.SendMessageAsync message
 
-                let! msg = msg1Awaiter.ResultAsync ()
-                msg |> Expect.equal "message" message
+                let! msg = msgReceived.ResultAsync ()
+                msg |> Expect.equal (nameof(msg)) messageExpected
+            })
+            testCaseAsyncTimeout defaultTimeout "One connection with three messages with OSC1_0 style size framing" (async {
+                let message1Expected = { addressPattern = "/foo"; arguments = [OscInt32 10; OscInt32 20] }
+                let message2Expected = {
+                    addressPattern = "/hmm/hmm/hmmmmmmmmmmmmmmmmmmmmmmmmmm"
+                    arguments = [   OscString "This is a message that is longer than most, but isn't so long that it has a big ego yet";
+                                    OscInt32 10; OscFloat32 -123.45f] }
+                let message3Expected = { addressPattern = "/bar"; arguments = [OscString "Hello, world"; OscInt32 10; OscFloat32 -123.45f] }
+                let msgChannel = Channel.CreateUnbounded()
+
+                let msgsAsStream msgs =
+                    let s = new MemoryStream()
+                    Async.RunSynchronously (async {
+                        for msg in msgs do
+                            do! writeOscMessageAsync s msg
+                    })
+                    s.Position <- 0L
+                    s
+                
+                let tcpClient =
+                    mockTcpListener [
+                        // connection 0
+                        msgsAsStream [message1Expected; message2Expected; message3Expected]
+                    ]
+                let server =
+                    new OscTcpServer(
+                        tcpClient,
+                        (fun m -> Async.AwaitTask (msgChannel.Writer.WriteAsync(m).AsTask()) ))
+
+                use _ = server.Run ()
+
+                let check name msg = async {
+                    let! m = Async.AwaitTask (msgChannel.Reader.ReadAsync().AsTask())
+                    m |> Expect.equal name msg
+                }
+
+                do! check (nameof(message1Expected)) message1Expected
+                do! check (nameof(message2Expected)) message2Expected
+                do! check (nameof(message3Expected)) message3Expected
+            })
+            testCaseAsyncTimeout defaultTimeout "Three connections with two messages each with OSC1_0 style size framing" (async {
+                let c1MessagesExpected =
+                    [{ addressPattern = "/foo"; arguments = [OscInt32 10; OscInt32 20] }
+                     { addressPattern = "/yay"; arguments = [OscString "connection 1 message 2"] }]
+                let c2MessagesExpected =
+                    [{  addressPattern = "/hmm/hmm/hmmmmmmmmmmmmmmmmmmmmmmmmmm"
+                        arguments = [   OscString "This is a message that is longer than most, but isn't so long that it has a big ego yet";
+                                        OscInt32 10; OscFloat32 -123.45f] }
+                     { addressPattern = "/woo/hoo"; arguments = [OscString "connection 3 message 2"] }]
+                let c3MessagesExpected =
+                    [{ addressPattern = "/yep"; arguments = [] }
+                     { addressPattern = "/bar"; arguments = [OscString "howdy"; OscInt32 10; OscFloat32 -123.45f] }
+                    ]
+                let msgChannel = Channel.CreateUnbounded()
+
+                let msgsAsStream msgs =
+                    let s = new MemoryStream()
+                    Async.RunSynchronously (async {
+                        for msg in msgs do
+                            do! writeOscMessageAsync s msg
+                    })
+                    s.Position <- 0L
+                    s
+                
+                let tcpClient =
+                    mockTcpListener [
+                        // connection 1
+                        msgsAsStream c1MessagesExpected
+                        // connection 2
+                        msgsAsStream c2MessagesExpected
+                        // connection 3
+                        msgsAsStream c3MessagesExpected
+                    ]
+                let server =
+                    new OscTcpServer(
+                        tcpClient,
+                        (fun m -> Async.AwaitTask (msgChannel.Writer.WriteAsync(m).AsTask()) ))
+
+                use _ = server.Run ()
+
+                // not sure how to enforce that messages are received in the right order or anything... Eh, just chuck all the
+                // results into a list and sort 'em, why not
+
+                // (why not? we're not enforcing via test that we can handle multiple clients at once. But I think this is close enough.)
+                let msgsExpectedSorted = [yield! c1MessagesExpected; yield! c2MessagesExpected; yield! c3MessagesExpected] |> List.sort
+
+                let! msgsActual =
+                    Seq.init 6 (fun _ ->
+                        Async.AwaitTask (msgChannel.Reader.ReadAsync().AsTask())
+                    )
+                    |> Async.Sequential
+                
+                let msgsSorted = msgsActual |> Seq.toArray |> Array.sort
+                msgsSorted |> Expect.sequenceEqual "All messages sorted" msgsExpectedSorted
             })
         ]
     ]
