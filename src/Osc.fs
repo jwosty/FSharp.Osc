@@ -542,6 +542,7 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
     member private this.HandleClient (clientStream: Stream) = async {
         try
             while true do
+                // TODO: make sure we're handling clients closing connections correctly
                 let! msg = parseOscMessageAsync clientStream
                 do! dispatch msg
         with e ->
@@ -549,9 +550,13 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
     }
 
     member private this.RunAsync () = async {
-        while true do
-            let! client = Async.AwaitTask (tcpListener.AcceptTcpClientAsync ())
-            Async.Start (this.HandleClient (client.GetStream ()))
+        try
+            while true do
+                let! client = Async.AwaitTask (tcpListener.AcceptTcpClientAsync ())
+                Async.Start (this.HandleClient (client.GetStream ()))
+        with e ->
+            // Can't use reraise() inside async: https://github.com/fsharp/fslang-suggestions/issues/660
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e).Throw()
     }
 
     member this.Run () =
@@ -573,67 +578,6 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
 
     interface IDisposable with
         override this.Dispose () = this.Dispose ()
-
-//type OscTcpServer(host: IPAddress, port: int, methods: DispatchTable list) =
-//    let cts = new CancellationTokenSource()
-//    let mutable running = false
-
-//    new(host: string, port, methods) = new OscTcpServer(IPAddress.Parse host, port, methods)
-
-//    member val Methods = methods with get, set
-
-//    member private this.ReadAndProcessMessage (tcpClient: TcpClient) = async {
-//        use tmpStream = new MemoryStream()
-//        let! msg = parseOscMessageAsync tmpStream
-//        let netStream = tcpClient.GetStream ()
-//        let tmpStreamBuffer = tmpStream.GetBuffer ()
-//        // first, write a big-endian int32 indicating the size of the OSC packet
-//        do! writeOscInt32Async netStream tmpStreamBuffer.Length
-//        // then, write the packet itself
-//        do! Async.AwaitTask (tmpStream.CopyToAsync netStream)
-//        match! Async.Catch (dispatchMessage this.Methods msg) with
-//        | Choice1Of2 () -> ()
-//        | Choice2Of2 e -> eprintfn "Message dispatch failed: %O" e
-//    }
-
-//    member private this.MessageLoop (tcpClient: TcpClient) = async {
-//        while tcpClient.Connected do
-//            match! Async.Catch (this.ReadAndProcessMessage tcpClient) with
-//            | Choice1Of2 result -> return result
-//            | Choice2Of2 e -> eprintfn "Error processing packet: %s" (string e)
-//    }
-
-//    member private this.HandleConnections (tcpListener: TcpListener) = async {
-//        while true do
-//            try
-//                let! connection = Async.AwaitTask (tcpListener.AcceptTcpClientAsync ())
-//                Async.Start (this.MessageLoop (connection))
-//            with e -> eprintfn "Error handling connection: %O" e
-//    }
-
-//    member private this.Start () = async {
-//        if running then raise (IOException("Server already listening"))
-//        let tcpListener = new TcpListener(host, port)
-//        tcpListener.Start ()
-//        printfn "Listening at %O:%d" host port
-//        do! this.HandleConnections tcpListener
-//    }
-
-//    member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
-//    member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
-
-//    interface IOscServer with
-//        override this.Run () = this.Run ()
-//        override this.RunInThreadPool () = this.RunInThreadPool ()
-
-//    member _.Dispose () =
-//        try
-//            cts.Cancel ()
-//        finally
-//            cts.Dispose ()
-
-//    interface IDisposable with
-//        member this.Dispose () = this.Dispose ()
 
 [<AutoOpen>]
 module Extensions =
