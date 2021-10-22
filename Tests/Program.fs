@@ -366,7 +366,15 @@ let tests =
                        byte 'o'; 0x00uy;   0x00uy;   0x00uy
                        0x3Fuy;   0x9Duy;   0xF3uy;   0xB6uy    // 1.234
                        0x40uy;   0xB5uy;   0xB2uy;   0x2Duy |] // 5.678
-
+                // using the new required types in OSC 1.1 (T, F, None, and Impulse): http://opensoundcontrol.org/files/2009-NIME-OSC-1.1.pdf
+                "OSC 1_1 types",
+                    { addressPattern = "/foo"; arguments = [OscNone; OscBool true; OscImpulse; OscInt32 0xDEADBEEF; OscBool false; OscInt32 0xCAFEBABE] },
+                    [| byte '/'; byte 'f'; byte 'o'; byte 'o'
+                       0x00uy;   0x00uy;   0x00uy;   0x00uy
+                       byte ','; byte 'N'; byte 'T'; byte 'I'
+                       byte 'i'; byte 'F'; byte 'i'; 0x00uy     // True, False, None, and Impulse all do not allocate any data in the arg list
+                       0xDEuy;   0xADuy;   0xBEuy;   0xEFuy
+                       0xCAuy;   0xFEuy;   0xBAuy;   0xBEuy |]
             ] |> List.map (fun (testName, value, bytes) ->
                 makeParseAndWriteTests Expect.equal parseOscMessageAsync writeOscMessageAsync testName value bytes
             )) @ ([

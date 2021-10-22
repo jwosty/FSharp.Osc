@@ -43,6 +43,9 @@ type OscAtom =
     | OscString of stringValue:string
     /// Arbitrary binary data
     | OscBlob of blobData:byte[]
+    | OscBool of bool
+    | OscNone
+    | OscImpulse
 
 type OscMessage = { addressPattern: string; arguments: OscAtom list }
 
@@ -176,6 +179,10 @@ let parseOscMessageAsync (input: Stream) = async {
             | 'f' -> parseOscFloat32Async input |> Async.map OscFloat32
             | 's' | 'S' -> parseOscStringAsync input |> Async.map OscString
             | 'b' -> parseOscBlobAsync input |> Async.map OscBlob
+            | 'T' -> async { return OscBool true }
+            | 'F' -> async { return OscBool false }
+            | 'N' -> async { return OscNone }
+            | 'I' -> async { return OscImpulse }
             | _ -> raise (MalformedMessageException($"Unknown data type tag '{tag}'"))
         )
         |> Async.Sequential
@@ -184,6 +191,7 @@ let parseOscMessageAsync (input: Stream) = async {
 
 let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
     do! writeOscAddressPatternAsync output value.addressPattern
+    let noop () = async { () }
     let (typesChars, writeFuncs) =
         value.arguments
         |> Seq.map (fun arg ->
@@ -192,6 +200,10 @@ let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
             | OscFloat32 x -> 'f', (fun () -> writeOscFloat32Async output x)
             | OscString x -> 's', (fun () -> writeOscStringAsync output x)
             | OscBlob x -> 'b', (fun () -> writeOscBlobAsync output x)
+            | OscBool true -> 'T', noop
+            | OscBool false -> 'F', noop
+            | OscNone -> 'N', noop
+            | OscImpulse -> 'I', noop
         )
         |> Seq.toArray
         |> Array.unzip
