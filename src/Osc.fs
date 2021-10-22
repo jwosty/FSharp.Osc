@@ -547,6 +547,7 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
                 do! dispatch msg
         with e ->
             eprintfn "Error handling client: %O" e
+            try onError e with e' -> eprintfn "Error inside error handler: %O" e'
     }
 
     member private this.RunAsync () = async {
