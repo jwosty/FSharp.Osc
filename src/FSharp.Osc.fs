@@ -1,10 +1,12 @@
 ﻿module FSharp.Osc
 open System
+open System.Collections.Generic
+open System.Text
+open System.Text.RegularExpressions
+#if !FABLE_COMPILER
 open System.Collections.Concurrent
 open System.IO
 open System.Runtime.CompilerServices
-open System.Text
-open System.Text.RegularExpressions
 open System.Threading
 open System.Runtime.InteropServices
 open FSharp.NativeInterop
@@ -26,6 +28,8 @@ type MalformedMessageException =
 
 let private raiseUnexpectedEof () = raise (MalformedMessageException("Unexpected end of stream"))
 let private raiseImpossible () = raise (InvalidOperationException("This should never be thrown"))
+#endif
+
 
 // OSC spec: http://opensoundcontrol.org/spec-1_0.html
 
@@ -49,6 +53,7 @@ type OscAtom =
 
 type OscMessage = { addressPattern: string; arguments: OscAtom list }
 
+#if !FABLE_COMPILER
 // TODO: Check big-endian systems. This *should* work correctly, but I haven't tested it
 let parseOscInt32Async (input: Stream) = async {
     let! bytes = input.AsyncRead 4
@@ -212,10 +217,15 @@ let writeOscMessageAsync (output: Stream) (value: OscMessage) = async {
     for writeFunc in writeFuncs do
         do! writeFunc ()
 }
+#endif
 
 type DispatchTable =
     | Path of name:string * children: DispatchTable list
     | Method of name:string * (OscMessage -> Async<unit>)
+
+#if FABLE_COMPILER
+type ConcurrentDictionary<'K,'V> = Dictionary<'K,'V>
+#endif
 
 let internal pathPartRegexes = ConcurrentDictionary<string, Regex>()
 
@@ -273,7 +283,7 @@ let dispatchMessage table (msg: OscMessage) = async {
         eprintfn "%s did not match any methods" msg.addressPattern
 }
 
-
+#if !FABLE_COMPILER
 open System.Net
 open System.Net.Sockets
 open System.Threading.Tasks
@@ -584,3 +594,4 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
 module Extensions =
     type IOscClient with
         member this.SendMessage msg = Async.RunSynchronously (this.SendMessageAsync msg)
+#endif

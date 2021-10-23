@@ -453,3 +453,5 @@ bower_components
 
 ### WebSharper ###
 Scripts/
+
+*.fs.js
