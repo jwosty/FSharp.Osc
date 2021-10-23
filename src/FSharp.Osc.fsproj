@@ -4,7 +4,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <PackageId>Osc.fs</PackageId>
+    <PackageId>FSharp.Osc</PackageId>
     <Version>1.0.0</Version>
     <Authors>jwostenberg</Authors>
     <Company />
@@ -12,7 +12,7 @@
     <Copyright>Copyright (C) 2021 John Wostenberg</Copyright>
     <PackageProjectUrl></PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RepositoryUrl>https://github.com/jwosty/Osc.fs/</RepositoryUrl>
+    <RepositoryUrl>https://github.com/jwosty/FSharp.Osc/</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
 	<PublishRepositoryUrl>true</PublishRepositoryUrl>
 	<IncludeSymbols>true</IncludeSymbols>
@@ -33,7 +33,7 @@
     <None Include="Script.fsx" />
     <None Include="SimpleServer.fsx" />
     <None Include="SimpleClient.fsx" />
-    <Compile Include="Osc.fs" />
+    <Compile Include="FSharp.Osc.fs" />
   </ItemGroup>
 
   <ItemGroup>

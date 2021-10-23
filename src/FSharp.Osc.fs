@@ -1,4 +1,4 @@
-﻿module Osc.fs
+﻿module FSharp.Osc
 open System
 open System.Collections.Concurrent
 open System.IO

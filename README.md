@@ -3,8 +3,8 @@ An [OSC 1.1](http://opensoundcontrol.org/files/2009-NIME-OSC-1.1.pdf) library fo
 A server:
 
 ```fsharp
-#load "Osc.fs"
-open Osc.fs
+#load "FSharp.Osc"
+open FSharp.Osc
 
 // listen for messages at /thing/volume on port 12345
 let server =
@@ -21,8 +21,8 @@ server.Run ()
 A client:
 
 ```fsharp
-#load "Osc.fs"
-open Osc.fs
+#load "FSharp.Osc"
+open FSharp.Osc
 open System
 
 let client = new OscUdpClient("127.0.0.1", 12345)
@@ -43,7 +43,7 @@ Currently, the following is supported:
 * TCP - client and server
     * Choose between OSC 1.0 and OSC 1.1 frame encodings
 
-The following is not yet implemented ([PRs are welcome!](https://github.com/jwosty/Osc.fs/pulls)):
+The following is not yet implemented ([PRs are welcome!](https://github.com/jwosty/FSharp.Osc/pulls)):
 
 * Timetag data types
 * Bundles

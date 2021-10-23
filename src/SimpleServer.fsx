@@ -1,5 +1,5 @@
-﻿#load "Osc.fs"
-open Osc.fs
+﻿#load "FSharp.Osc"
+open FSharp.Osc
 open System
 open System.Diagnostics
 

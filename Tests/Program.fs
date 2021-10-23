@@ -1,4 +1,4 @@
-﻿module Osc.fs.Tests
+﻿module FSharp.Osc.Tests
 open System
 open System.Collections.Concurrent
 open System.IO
@@ -8,7 +8,7 @@ open System.Threading.Tasks
 open System.Net.Sockets
 open Expecto
 open Expecto.Flip
-open Osc.fs
+open FSharp.Osc
 open System.Net
 open System.Runtime.ExceptionServices
 

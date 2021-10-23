@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.31702.278
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Osc.fs", "src\Osc.fs.fsproj", "{E4BF0945-D43D-4CE1-A323-36AFCB5E7B85}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Osc", "src\FSharp.Osc.fsproj", "{E4BF0945-D43D-4CE1-A323-36AFCB5E7B85}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Tests", "Tests\Tests.fsproj", "{E61F9771-A70A-43B3-88DB-D2E601745D7C}"
 EndProject

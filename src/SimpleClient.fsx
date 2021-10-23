@@ -1,12 +1,12 @@
-﻿#load "Osc.fs"
-open Osc.fs
+﻿#load "FSharp.Osc.fs"
+open FSharp.Osc
 open System
 open System.Threading
 
 let client : IOscClient =
     upcast new OscUdpClient("127.0.0.1", 12345)
 
-client.SendMessage { addressPattern = "/window/openurl"; arguments = [OscString "https://github.com/jwosty/Osc.fs"] }
+client.SendMessage { addressPattern = "/window/openurl"; arguments = [OscString "https://github.com/jwosty/FSharp.Osc"] }
 
 let rand = Random()
 
