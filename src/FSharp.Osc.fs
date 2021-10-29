@@ -353,7 +353,7 @@ let private resetMemoryStream (stream: MemoryStream) =
 type OscUdpClient internal(localEP: IPEndPoint, udpClient: IUdpClient, ?autoConnect) =
     let tempStream = new MemoryStream()
     do
-        if (defaultArg autoConnect false) then
+        if (defaultArg autoConnect true) then
             udpClient.Connect localEP
 
     new(localEP: IPEndPoint, ?autoConnect) =
