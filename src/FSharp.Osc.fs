@@ -356,7 +356,7 @@ type OscUdpClient internal(localEP: IPEndPoint, udpClient: IUdpClient) =
         udpClient.Connect localEP
 
     new(localEP: IPEndPoint) =
-        new OscUdpClient(localEP, new UdpClientImpl(new UdpClient()))
+        new OscUdpClient(localEP, new UdpClientImpl(new UdpClient(localEP.AddressFamily)))
     new(host: IPAddress, port: int) = new OscUdpClient(IPEndPoint(host, port))
     new(host: string, port: int) = new OscUdpClient(IPAddress.Parse host, port)
 

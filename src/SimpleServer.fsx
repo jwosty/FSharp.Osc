@@ -45,11 +45,12 @@ let methods = [
     ])
 ]
 
-let port = 12345
+let host, port = "127.0.0.1", 12345
 let useUdp = true
 
 let server : IOscServer =
-    if useUdp then upcast new OscUdpServer("127.0.0.1", port, methods)
+    if useUdp then upcast new OscUdpServer(host, port, methods)
     else raise (NotImplementedException()) (*upcast new OscTcpServer(System.Net.IPAddress.Any, port, methods)*)
 
+printfn "Listening on %s:%d" host port
 server.RunSynchronously ()
