@@ -350,19 +350,20 @@ let private resetMemoryStream (stream: MemoryStream) =
     stream.Position <- 0L
     stream.SetLength 0L
 
-type OscUdpClient internal(localEP: IPEndPoint, udpClient: IUdpClient) =
+type OscUdpClient internal(localEP: IPEndPoint, udpClient: IUdpClient, ?autoConnect) =
     let tempStream = new MemoryStream()
     do
-        udpClient.Connect localEP
+        if (defaultArg autoConnect false) then
+            udpClient.Connect localEP
 
-    new(localEP: IPEndPoint) =
-        new OscUdpClient(localEP, new UdpClientImpl(new UdpClient(localEP.AddressFamily)))
-    new(host: IPAddress, port: int) = new OscUdpClient(IPEndPoint(host, port))
-    new(host: string, port: int) = new OscUdpClient(IPAddress.Parse host, port)
+    new(localEP: IPEndPoint, ?autoConnect) =
+        new OscUdpClient(localEP, new UdpClientImpl(new UdpClient(localEP.AddressFamily)), ?autoConnect = autoConnect)
+    new(host: IPAddress, port: int, ?autoConnect) = new OscUdpClient(IPEndPoint(host, port), ?autoConnect = autoConnect)
+    new(host: string, port: int, ?autoConnect) = new OscUdpClient(IPAddress.Parse host, port, ?autoConnect = autoConnect)
 
-    internal new(host: string, port: int, makeUdpClient: IPEndPoint -> IUdpClient) =
+    internal new(host: string, port: int, makeUdpClient: IPEndPoint -> IUdpClient, ?autoConnect) =
         let localEP = IPEndPoint(IPAddress.Parse host, port)
-        new OscUdpClient(localEP, makeUdpClient localEP)
+        new OscUdpClient(localEP, makeUdpClient localEP, ?autoConnect = autoConnect)
 
     member this.SendMessageAsync (msg: OscMessage) = async {
         resetMemoryStream tempStream
