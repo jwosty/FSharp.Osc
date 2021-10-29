@@ -1,4 +1,4 @@
-﻿#load "FSharp.Osc"
+﻿#load "FSharp.Osc.fs"
 open FSharp.Osc
 open System
 open System.Diagnostics
@@ -46,10 +46,10 @@ let methods = [
 ]
 
 let port = 12345
-let useUdp = false
+let useUdp = true
 
 let server : IOscServer =
     if useUdp then upcast new OscUdpServer("127.0.0.1", port, methods)
     else raise (NotImplementedException()) (*upcast new OscTcpServer(System.Net.IPAddress.Any, port, methods)*)
 
-server.Run ()
+server.RunSynchronously ()

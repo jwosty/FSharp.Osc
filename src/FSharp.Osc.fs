@@ -393,6 +393,12 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
     let onError = defaultArg onError ignore
 
     internal new(host: string, port, makeUdpClient, dispatch, ?onError) = new OscUdpServer(IPAddress.Parse host, port, makeUdpClient, dispatch, ?onError = onError)
+    new(host: string, port, dispatch, ?onError) =
+        new OscUdpServer(IPAddress.Parse host, port, (fun (localEP: IPEndPoint) -> new UdpClientImpl(new UdpClient(localEP)) :> IUdpClient), dispatch, ?onError = onError)
+    new(host: string, port, methods, ?onError) =
+        new OscUdpServer(IPAddress.Parse host, port, (fun (localEP: IPEndPoint) -> new UdpClientImpl(new UdpClient(localEP)) :> IUdpClient), dispatchMessage methods, ?onError = onError)
+    new(host: string, port, method, ?onError) =
+        new OscUdpServer(host, port, [method], ?onError = onError)
 
     member private this.ReadAndProcessMessage (udpClient: IUdpClient) = async {
         let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
@@ -437,9 +443,6 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
         Async.Start (this.RunAsync (), cancellationToken = cts.Token)
         this :> IDisposable
 
-    //member this.Run () = Async.RunSynchronously (this.Start (), cancellationToken = cts.Token)
-    //member this.RunInThreadPool () = Async.Start (this.Start (), cts.Token)
-
     interface IOscServer with
         override this.Run () = this.Run ()
         override this.RunSynchronously () = this.RunSynchronously ()
@@ -469,6 +472,8 @@ type OscTcpClient internal(tcpClient: ITcpClient, ?frameScheme) =
     let frameScheme = defaultArg frameScheme Osc1_0
 
     new(tcpClient: TcpClient, ?frameScheme) = new OscTcpClient(new TcpClientImpl(tcpClient), ?frameScheme = frameScheme)
+    new(localEP: IPEndPoint, ?frameScheme) = new OscTcpClient(new TcpClientImpl(new TcpClient(localEP)), ?frameScheme = frameScheme)
+    new(host: string, port, ?frameScheme) = new OscTcpClient(new TcpClientImpl(new TcpClient(host, port)), ?frameScheme = frameScheme)
 
     member this.ConnectAsync (host: IPAddress, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
     member this.ConnectAsync (host: string, port: int) = async { return! Async.AwaitTask (tcpClient.ConnectAsync (host, port)) }
