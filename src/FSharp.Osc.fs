@@ -308,6 +308,7 @@ type internal ITcpClient =
     abstract member GetStream: unit -> Stream
 
 type internal ITcpListener =
+    inherit IDisposable
     abstract member Start: unit -> unit
     abstract member AcceptTcpClientAsync: unit -> Task<ITcpClient>
 
@@ -334,6 +335,9 @@ type TcpListenerImpl(listener: TcpListener) =
         override _.AcceptTcpClientAsync () = 
             listener.AcceptTcpClientAsync().ContinueWith(fun (t: Task<TcpClient>) -> new TcpClientImpl(t.Result) :> ITcpClient)
         override _.Start () = listener.Start ()
+
+    interface IDisposable with
+        override _.Dispose () = listener.Stop ()
 
 type IOscClient =
     inherit IDisposable
@@ -403,28 +407,33 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
 
     member private this.ReadAndProcessMessage (udpClient: IUdpClient) = async {
         let! data = Async.AwaitTask (udpClient.ReceiveAsync ())
-        let stream = new MemoryStream(data.Buffer)
-        let! msg = parseOscMessageAsync stream
-        
-        dispatch msg
-        |> Async.Catch
-        |> Async.map (fun result ->
-            match result with
-            | Choice1Of2 () -> ()
-            | Choice2Of2 e ->
-                eprintfn "Message dispatch failed: %O" e
-                try onError e with e' -> eprintfn "Error inside error handler %O" e'
-        )
-        |> Async.Start
+        try
+            let stream = new MemoryStream(data.Buffer)
+            let! msg = parseOscMessageAsync stream
+
+            dispatch msg
+            |> Async.Catch
+            |> Async.map (fun result ->
+                match result with
+                | Choice1Of2 () -> ()
+                | Choice2Of2 e ->
+                    eprintfn "Message dispatch failed: %O" e
+                    try onError e with e' -> eprintfn "Error inside error handler %O" e'
+            )
+            |> Async.Start
+        with e ->
+            eprintfn "Error reading OSC message: %O" e
     }
 
     member private this.MessageLoop (udpClient: IUdpClient) = async {
-        while true do
-            match! Async.Catch (this.ReadAndProcessMessage udpClient) with
-            | Choice1Of2 result -> return result
-            | Choice2Of2 e ->
-                eprintfn "Error processing packet: %s" (string e)
-                try onError e with e' -> eprintfn "Error inside error handler %O" e'
+        try
+            while true do
+                return! this.ReadAndProcessMessage udpClient
+        with
+        | :? ObjectDisposedException as e -> () // happens after closing the socket
+        | e ->
+            eprintfn "Error processing packet: %s" (string e)
+            try onError e with e' -> eprintfn "Error inside error handler %O" e'
     }
 
     /// Asynchronously starts listening and processing packets, calling back when the server is shut down.
@@ -597,11 +606,13 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
         override this.RunSynchronously () = this.RunSynchronously ()
 
     member _.Dispose () =
-        try
-            cts.Cancel ()
-        finally
-            cts.Dispose ()
-            disposed <- true
+        if not disposed then
+            (tcpListener :> IDisposable).Dispose ()
+            try
+                cts.Cancel ()
+            finally
+                cts.Dispose ()
+                disposed <- true
 
     interface IDisposable with
         override this.Dispose () = this.Dispose ()
