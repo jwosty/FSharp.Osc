@@ -398,10 +398,16 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
     let onError = defaultArg onError ignore
 
     internal new(host: string, port, makeUdpClient, dispatch, ?onError) = new OscUdpServer(IPAddress.Parse host, port, makeUdpClient, dispatch, ?onError = onError)
+    
+    static member private MakeUdpClient (localEP: IPEndPoint) =
+        let uc = new UdpClient()
+        uc.Client.Bind localEP
+        new UdpClientImpl(uc) :> IUdpClient
+
     new(host: string, port, dispatch, ?onError) =
-        new OscUdpServer(IPAddress.Parse host, port, (fun (localEP: IPEndPoint) -> new UdpClientImpl(new UdpClient(localEP)) :> IUdpClient), dispatch, ?onError = onError)
+        new OscUdpServer(IPAddress.Parse host, port, OscUdpServer.MakeUdpClient, dispatch, ?onError = onError)
     new(host: string, port, methods, ?onError) =
-        new OscUdpServer(IPAddress.Parse host, port, (fun (localEP: IPEndPoint) -> new UdpClientImpl(new UdpClient(localEP)) :> IUdpClient), dispatchMessage methods, ?onError = onError)
+        new OscUdpServer(IPAddress.Parse host, port, OscUdpServer.MakeUdpClient, dispatchMessage methods, ?onError = onError)
     new(host: string, port, method, ?onError) =
         new OscUdpServer(host, port, [method], ?onError = onError)
 
