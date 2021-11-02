@@ -2,6 +2,7 @@
 open FSharp.Osc
 open System
 open System.Diagnostics
+open System.Net
 
 let (|OscNumber|_|) arg =
     match arg with
@@ -45,12 +46,12 @@ let methods = [
     ])
 ]
 
-let host, port = "127.0.0.1", 12345
+let host, port = System.Net.IPAddress.IPv6Any, 12345
 let useUdp = true
 
 let server : IOscServer =
-    if useUdp then upcast new OscUdpServer(host, port, methods)
+    if useUdp then upcast new OscUdpServer(host, port, methods, dualModeSocket = true)
     else raise (NotImplementedException()) (*upcast new OscTcpServer(System.Net.IPAddress.Any, port, methods)*)
 
-printfn "Listening on %s:%d" host port
+printfn "Listening on [%O]:%d" host port
 server.RunSynchronously ()

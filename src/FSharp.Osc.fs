@@ -388,7 +388,7 @@ type OscUdpClient internal(localEP: IPEndPoint, udpClient: IUdpClient, ?autoConn
 
 type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint -> IUdpClient, dispatch: OscMessage -> Async<unit>, ?onError: Exception -> unit) =
     let cts = new CancellationTokenSource()
-    let mutable running = false
+    let mutable udpClient = None
     let mutable disposed = false
 
     let onError = defaultArg onError ignore
@@ -427,13 +427,14 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
                 try onError e with e' -> eprintfn "Error inside error handler %O" e'
     }
 
-    /// Asynchronous starts listening and processing packets, calling back when the server is shut down.
+    /// Asynchronously starts listening and processing packets, calling back when the server is shut down.
     member private this.RunAsync () = async {
-        if running then raise (IOException("Server already listening"))
+        if Option.isSome udpClient then raise (IOException("Server already listening"))
         let endPoint = IPEndPoint (host, port)
-        use udpClient = makeUdpClient endPoint
+        let uc = makeUdpClient endPoint
+        udpClient <- Some uc
         //udpClient.Connect (IPEndPoint (host, port))
-        do! this.MessageLoop udpClient
+        do! this.MessageLoop uc
     }
 
     /// Starts listening for and processing packets on the current thread.
@@ -450,6 +451,9 @@ type OscUdpServer internal(host: IPAddress, port: int, makeUdpClient: IPEndPoint
 
     member _.Dispose () =
         if not disposed then
+            match udpClient with
+            | Some uc -> uc.Dispose ()
+            | None -> ()
             try
                 cts.Cancel ()
             finally
