@@ -552,8 +552,14 @@ type OscTcpServer internal(tcpListener: ITcpListener, dispatch: OscMessage -> As
     // TODO: implement OSC 1.1 SLIP framing
         if frameScheme = Osc1_1 then raise (NotImplementedException("OSC 1.1 frame scheme (SLIP encoding) not implemented yet"))
 
-    internal new(host: IPAddress, port: int, dispatch, ?frameScheme, ?onError) =
+    new(host: IPAddress, port: int, dispatch, ?frameScheme, ?onError) =
         new OscTcpServer(new TcpListenerImpl(new TcpListener(host, port)), dispatch, ?frameScheme = frameScheme, ?onError = onError)
+    new(host: IPAddress, port: int, methods, ?frameScheme, ?onError) =
+        new OscTcpServer(new TcpListenerImpl(new TcpListener(host, port)), dispatchMessage methods, ?frameScheme = frameScheme, ?onError = onError)
+    new(host: string, port: int, dispatch: _ -> _, ?frameScheme, ?onError) =
+        new OscTcpServer(IPAddress.Parse host, port, dispatch, ?frameScheme = frameScheme, ?onError = onError)
+    new(host: string, port: int, methods: _ seq, ?frameScheme, ?onError) =
+        new OscTcpServer(IPAddress.Parse host, port, dispatchMessage methods, ?frameScheme = frameScheme, ?onError = onError)
 
     member private this.HandleClient (clientStream: Stream) = async {
         try

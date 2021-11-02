@@ -771,7 +771,7 @@ let tests =
                 let server =
                     new OscUdpServer(
                         "127.0.0.1", 1234,
-                        (fun e -> setEndPoint e; udpClient),
+                        (fun (e,_) -> setEndPoint e; udpClient),
                         (fun m -> async { msgReceived.Continue m }))
 
                 use _ = server.Run ()
@@ -804,7 +804,7 @@ let tests =
                 let server =
                     new OscUdpServer(
                         "127.0.0.1", 1234,
-                        (fun e -> setEndPoint e; udpClient),
+                        (fun (e,_) -> setEndPoint e; udpClient),
                         (fun m -> Async.AwaitTask ((msgChannel.Writer.WriteAsync m).AsTask())))
 
                 use _ = server.Run ()
