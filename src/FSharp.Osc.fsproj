@@ -5,7 +5,7 @@
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <PackageId>FSharp.Osc</PackageId>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>jwostenberg</Authors>
     <Company />
     <Description>OSC 1.1 library for F#</Description>
