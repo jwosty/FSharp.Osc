@@ -80,6 +80,7 @@ let internal mockTcpListener (connectionStreams: Stream seq) =
                 return mockTcpClient ss.Current
             }
             override _.Start () = started <- true 
+            override _.Dispose () = ()
     }
 
 let writeOscMessageToArrayAsync msg = async {
@@ -763,15 +764,18 @@ let tests =
                     return memStream.ToArray()
                 }
 
-                let udpClient, setEndPoint =
-                    mockUdpClient
-                        (Some (fun endPoint ->
-                            Task.FromResult (UdpReceiveResult(msgBytes, endPoint))))
-                        (Some (fun (data, bytes) -> raise (NotImplementedException())))
+                let makeUdpClient endPoint =
+                    let udpClient, setEndPoint =
+                        mockUdpClient
+                            (Some (fun endPoint ->
+                                Task.FromResult (UdpReceiveResult(msgBytes, endPoint))))
+                            (Some (fun (data, bytes) -> raise (NotImplementedException())))
+                    setEndPoint endPoint
+                    udpClient
                 let server =
                     new OscUdpServer(
                         "127.0.0.1", 1234,
-                        (fun (e,_) -> setEndPoint e; udpClient),
+                        makeUdpClient,
                         (fun m -> async { msgReceived.Continue m }))
 
                 use _ = server.Run ()
@@ -790,21 +794,24 @@ let tests =
 
                 let xs = ConcurrentStack<_>()
 
-                let udpClient, setEndPoint =
-                    mockUdpClient
-                        (Some (fun endPoint ->
-                            task {
-                                msgBytesEnumerator.MoveNext () |> ignore
-                                let x = msgBytesEnumerator.Current
-                                xs.Push x
-                                return UdpReceiveResult(x, endPoint)
-                            }
-                        ))
-                        (Some (fun (data, bytes) -> raise (NotImplementedException())))
+                let makeUdpClient endPoint =
+                    let udpClient, setEndPoint =
+                        mockUdpClient
+                            (Some (fun endPoint ->
+                                task {
+                                    msgBytesEnumerator.MoveNext () |> ignore
+                                    let x = msgBytesEnumerator.Current
+                                    xs.Push x
+                                    return UdpReceiveResult(x, endPoint)
+                                }
+                            ))
+                            (Some (fun (data, bytes) -> raise (NotImplementedException())))
+                    setEndPoint endPoint
+                    udpClient
                 let server =
                     new OscUdpServer(
                         "127.0.0.1", 1234,
-                        (fun (e,_) -> setEndPoint e; udpClient),
+                        makeUdpClient,
                         (fun m -> Async.AwaitTask ((msgChannel.Writer.WriteAsync m).AsTask())))
 
                 use _ = server.Run ()
